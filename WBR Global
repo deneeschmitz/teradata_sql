@@ -1,0 +1,445 @@
+--WBR GLOBAL
+--DELETE FROM TABLE
+DELETE FROM sandbox.rev_mgmt_wbr_global WHERE report_date between current_date-10 and current_date-1;
+
+--INSERT NA DATA
+INSERT INTO sandbox.rev_mgmt_wbr_global
+SELECT
+ report_date                         as report_date,
+ report_week_completed_flag          as wk_complete_flag,
+ trim(platform_key)                  as platform_key,
+ country                             as country,
+ 'NA'                                as region,
+ 'NA'                                as economic_area,
+ brand                               as brand,
+ platform                            as platform,
+ case
+  when traffic_source in ('Managed Social','Paid User Referral','Promoted Social','Free Referral')  then 'Social & Referral' 
+  when coalesce(traffic_source,'Unknown') in ('Unknown','Unknown Utm','?') then 'Unknown'
+  else traffic_source
+ end                                 as traffic_source,
+ case 
+  when traffic_source in ('Email','Push Notification') then 'Push Channels'
+  when traffic_source in ('Direct','SEO') then 'Pull Channels'
+  when traffic_source in ('SEM','Affiliate','Managed Social','Paid User Referral','Promoted Social','Display') then 'Paid Channels'
+  else 'Other Channels' 
+ end                                 as channel_group,
+ grt_l1                              as grt_l1,
+ grt_l2                              as grt_l2,
+ case
+  when grt_l1 = 'L1 - Local' then 'Local' 
+  when grt_l1 = 'L1 - Shopping' then 'Goods' 
+  when grt_l1 = 'L1 - Travel' then 'Travel' 
+  when grt_l1 = 'multi' then 'Multi' 
+  else 'Other'
+ end                                 as business,
+ case
+  when grt_l1 = 'L1 - Shopping' then 'Goods' 
+  when coalesce(vertical,'unknown') in ('?','\N','unknown','Charity','Other') then 'Other' 
+  else vertical 
+ end                                 as vertical,
+ grt_l3                              as segment,
+ coalesce(inventory_service,'other') as inventory_service,
+ stps_flag                           as stps_flag,
+ wow_deal_flag                       as wow_flag,
+ null                                as promo_day_type,
+ null                                as time_period1,
+ null                                as time_period2,
+ null                                as wbr_report_date,
+ null                                as wbr_report_week,
+ null                                as wbr_year_type,
+ sum(site_total_impressions + email_total_impressions)        as imps,
+ sum(site_weighted_impressions + email_weighted_impressions)  as weighted_imps,
+ sum(null)                                                    as uniq_visitors,
+ sum(udv)                                                     as udv,
+ sum(orders)                                                  as orders,  
+ sum(units)                                                   as units,
+ sum(nob)                                                     as nob,
+ sum(nor)                                                     as nor,
+ sum(gb)                                                      as gb,
+ sum(gr)                                                      as gr,
+ sum(ogp)                                                     as gp,
+ sum(activations + reactivations)                             as gross_adds,
+ sum(od_act_react_orders + ils_act_react_orders)              as assisted_gross_adds,
+ sum(od_act_react_spend + ils_act_react_spend)                as assisted_gross_add_spend,
+ sum(od_spend)                                                as OD,
+ sum(ils_spend)                                               as ILS,
+ sum(od_orders)                                               as od_orders,
+ sum(ils_orders)                                              as ils_orders,
+ sum(cancel_orders)                                           as cancel_orders,
+ null as promo_sub_cat,
+ null as promo
+FROM sandbox.rev_mgmt_deal_funnel
+WHERE report_date between current_date-10 and current_date-1
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,44;
+
+--INSERT INTL DATA
+INSERT INTO sandbox.rev_mgmt_wbr_global
+SELECT
+ coalesce(s.report_date,e.report_date,tf.report_date)                                  as report_date,
+ case when CURRENT_DATE - 1 >= cast(wk.week_end as date) then 1 else 0 end             as wk_complete_flag,
+ trim(coalesce(s.platform_key,e.platform_key,tf.platform_key))                         as platform_key,
+ coalesce(s.country_code,e.country_code,tf.country_code)                               as country,
+ coalesce(r.region,'?')                                                                as region,
+ coalesce(s.economic_area,e.economic_area,tf.economic_area)                            as economic_area,
+ coalesce(s.brand,e.brand,tf.brand)                                                    as brand,
+ coalesce(s.platform,e.platform,tf.platform)                                           as platform,
+ case
+  when coalesce(s.traffic_source,e.traffic_source,tf.traffic_source,'Unknown') 
+   in ('Managed Social','Paid User Referral','Promoted Social','Free Referral') 
+   then 'Social & Referral' 
+  when coalesce(s.traffic_source,e.traffic_source,tf.traffic_source,'Unknown') 
+   in ('Unknown','Unknown Utm','?') then 'Unknown'
+  else coalesce(s.traffic_source,e.traffic_source,tf.traffic_source,'Unknown')
+ end                                                                                   as traffic_source,
+ case 
+  when coalesce(s.traffic_source,e.traffic_source,tf.traffic_source,'Unknown') 
+   in ('Email','Push Notification') then 'Push Channels'
+  when coalesce(s.traffic_source,e.traffic_source,tf.traffic_source,'Unknown') 
+   in ('Direct','SEO') then 'Pull Channels'
+  when coalesce(s.traffic_source,e.traffic_source,tf.traffic_source,'Unknown')
+   in ('SEM','Affiliate','Managed Social','Paid User Referral','Promoted Social','Display') 
+   then 'Paid Channels'
+  else 'Other Channels' 
+ end                                                                                  as channel_group,
+ coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?')                                            as grt_l1,
+ coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?')                                            as grt_l2,
+ case 
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') = 'L1 - Local' then 'Local' 
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') = 'L1 - Shopping' then 'Goods' 
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') = 'L1 - Travel' then 'Travel' 
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') = 'multi' then 'Multi' 
+  else 'Other'
+ end                                                                                  as business,
+ case
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') = 'L1 - Shopping' then 'Goods' 
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') in ('?','\N',null,'unknown') 
+   or coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?') = 'L2 - Charity' then 'Other'
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') = 'L1 - Travel' then 'Travel'
+  when coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?') = 'L2 - Health / Beauty / Wellness' then 'HBW'
+  when coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?') = 'L2 - Home & Auto' then 'H&A'
+  when coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?') = 'L2 - Food & Drink' then 'F&D'
+  when coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?') = 'L2 - Consumer Electronics' then 'CE'
+  when coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?') 
+   like 'L2 - Shopping - Health / Beauty%' then 'Shopping - HBW'
+  else coalesce(oreplace(coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?'),'L2 - ',''),'Other')
+ end                                                                                  as vertical,
+ case
+  when coalesce(s.grt_l1,e.grt_l1,tf.grt_l1,'?') in ('L1 - Shopping','L1 - Travel') then coalesce(s.grt_l2,e.grt_l2,tf.grt_l2,'?')
+  else vertical   
+ end            as segment,
+ 'other'        as inventory_service, 
+ 0              as stps_flag,
+ 0              as wow_flag,
+ 'N/A'          as promo_day_type,
+ null           as time_period1,
+ null           as time_period2,
+ null           as wbr_report_date,
+ null           as wbr_report_week,
+ null           as wbr_year_type,
+ coalesce(site_total_impressions,0) + coalesce(email_total_impressions,0) as imps,
+ 0                                                     as weighted_imps,
+ null                                                  as uniq_visitors,
+ coalesce(udv,0)                                       as udv,
+ coalesce(orders,0)                                    as orders,  
+ coalesce(units,0)                                     as units,
+ coalesce(nob,0)                                       as nob,
+ coalesce(nor,0)                                       as nor,
+ coalesce(gb,0)                                        as gb,
+ coalesce(gr,0)                                        as gr,
+ null                                                  as gp,
+ coalesce(gross_adds,0)                                as gross_adds,
+ coalesce(assisted_gross_adds,0)                       as assisted_gross_adds,
+ coalesce(assisted_gross_add_spend,0)                  as assisted_gross_add_spend,
+ coalesce(OD,0)                                        as OD,
+ coalesce(ILS,0)                                       as ILS,
+ coalesce(od_orders,0)                                 as od_orders,
+ coalesce(ils_orders,0)                                as ils_orders,
+ coalesce(cancel_orders,0)                             as cancel_orders,
+ null as promo_sub_cat,
+ null as promo
+FROM 
+ (SELECT 
+   report_date, 
+   economic_area,
+   country_code, 
+   coalesce(initcap(traffic_source),'unknown') as traffic_source, 
+   'email'                                     as platform,
+   platform_key                                as platform_key,
+   coalesce(user_brand_affiliation,'unknown')  as brand,
+   coalesce(grt_l1_cat_name,'unknown')         as grt_l1,
+   coalesce(grt_l2_cat_name,'unknown')         as grt_l2,
+   sum(total_sd_opens)                         as email_total_impressions
+  FROM user_edwprod.gbl_email_impression_agg_opens 
+  WHERE report_date between current_date-10 and current_date-1 and economic_area not in ('NA','LATAM')
+  GROUP BY 1,2,3,4,5,6,7,8,9
+ ) e
+ FULL OUTER JOIN
+  (SELECT 
+    report_date, 
+    economic_area,
+    country_code, 
+    coalesce(initcap(traffic_source),'unknown') as traffic_source, 
+    coalesce(lower(platform),'unknown')         as platform,
+    coalesce(platform_key_traffic,0)            as platform_key,
+    coalesce(user_brand_affiliation,'unknown')  as brand,
+    coalesce(grt_l1_cat_name,'unknown')         as grt_l1,
+    coalesce(grt_l2_cat_name,'unknown')         as grt_l2,
+    sum(total_impressions)                      as site_total_impressions
+   FROM user_edwprod.agg_gbl_impressions_deal 
+   WHERE report_date between current_date-10 and current_date-1 and economic_area not in ('NA','LATAM')
+   GROUP BY 1,2,3,4,5,6,7,8,9
+  ) s
+  on e.report_date = s.report_date
+  and e.country_code = s.country_code
+  and e.traffic_source = s.traffic_source
+  and e.platform = s.platform
+  and e.platform_key = s.platform_key
+  and e.brand = s.brand
+  and e.economic_area = s.economic_area
+  and e.grt_l1 = s.grt_l1
+  and e.grt_l2 = s.grt_l2
+ FULL OUTER JOIN
+  (SELECT 
+    report_date, 
+    economic_area,
+    country_code, 
+    coalesce(initcap(traffic_source),'unknown') as traffic_source, 
+    coalesce(lower(platform),'unknown')         as platform,
+    coalesce(platform_key_traffic,0)            as platform_key,
+    coalesce(user_brand_affiliation,'unknown')  as brand,
+    coalesce(grt_l1_cat_name,'unknown')         as grt_l1,
+    coalesce(grt_l2_cat_name,'unknown')         as grt_l2,
+    sum(coalesce(uniq_deal_views,0))                as udv,
+    sum(coalesce(transactions,0))                   as orders,  
+    sum(coalesce(transactions_qty,0))               as units,
+    sum(coalesce(nob_USD,0))                        as nob,
+    sum(coalesce(nor_USD,0))                        as nor,
+    sum(coalesce(gross_bookings_USD,0))             as gb,
+    sum(coalesce(gross_revenue_USD,0))              as gr,
+    sum(coalesce(activations,0) + coalesce(reactivations,0))  as gross_adds,
+    sum(coalesce(od_activations_qty,0) + coalesce(od_reactivations_qty,0) + coalesce(ils_activations_qty,0) + coalesce(ils_reactivations_qty,0)) as assisted_gross_adds,
+    sum(coalesce(od_activations_amt_USD,0) + coalesce(od_reactivations_amt_USD,0) + coalesce(ils_activations_amt_USD,0) + coalesce(ils_reactivations_amt_USD,0)) as assisted_gross_add_spend,
+    sum(coalesce(od_amt_USD,0))                     as OD,
+    sum(coalesce(ils_amt_USD,0))                    as ILS,
+    sum(coalesce(od_qty,0))                         as od_orders,
+    sum(coalesce(ils_qty,0))                        as ils_orders,
+    sum(coalesce(same_day_cancel_qty,0))            as cancel_orders
+   FROM user_edwprod.agg_gbl_traffic_financials_l2
+   WHERE report_date between current_date-10 and current_date-1 and economic_area not in ('NA','LATAM') and platform_key_traffic is not null 
+   GROUP BY 1,2,3,4,5,6,7,8,9
+  ) tf
+  on tf.report_date = coalesce(s.report_date,e.report_date)
+  and tf.country_code = coalesce(s.country_code,e.country_code)
+  and tf.traffic_source = coalesce(s.traffic_source,e.traffic_source)
+  and tf.platform = coalesce(s.platform,e.platform)
+  and tf.platform_key = coalesce(s.platform_key,e.platform_key)
+  and tf.brand = coalesce(s.brand,e.brand)
+  and tf.economic_area = coalesce(s.economic_area,e.economic_area)
+  and tf.grt_l1 = coalesce(s.grt_l1,e.grt_l1)
+  and tf.grt_l2 = coalesce(s.grt_l2,e.grt_l2)
+ JOIN user_groupondw.dim_day dy on dy.day_rw = coalesce(s.report_date,e.report_date,tf.report_date)
+ JOIN user_groupondw.dim_week wk on dy.week_key = wk.week_key
+ LEFT JOIN (select distinct country_iso_code_2,region from user_groupondw.gbl_dim_country) r on r.country_iso_code_2 = coalesce(s.country_code,e.country_code,tf.country_code);
+
+--INSERT VISITOR DATA
+INSERT INTO sandbox.rev_mgmt_wbr_global
+SELECT
+ tf.report_date                                                             as report_date,
+ case when CURRENT_DATE - 1 >= cast(wk.week_end as date) then 1 else 0 END  as wk_complete_flag,
+ trim(tf.platform_key)                                                      as platform_key,
+ tf.country                                                                 as country,
+ tf.region                                                                  as region,
+ tf.economic_area                                                           as economic_area,
+ tf.brand                                                                   as brand,
+ tf.platform                                                                as platform,
+ tf.traffic_source                                                          as traffic_source,
+ tf.channel_group                                                           as channel_group,
+ 'Visitors' as grt_l1,
+ 'Visitors' as grt_l2,
+ 'Visitors' as business,
+ 'Visitors' as vertical,
+ 'Visitors' as segment,
+ 'Visitors' as inventory_service, 
+ 0 as stps_flag,
+ 0 as wow_flag,
+ null as promo_day_type,
+ null as time_period1,
+ null as time_period2,
+ null as wbr_report_date,
+ null as wbr_report_week,
+ null as wbr_year_type,
+ null as imps,
+ null as weighted_imps,
+ zeroifnull(uniq_visitors_gpr) -zeroifnull(uniq_visitors_adj) as uniq_visitors,
+ null as udv,
+ null as orders,  
+ null as units,
+ null as nob,
+ null as nor,
+ null as gb,
+ null as gr,
+ null as gp,
+ null as gross_adds,
+ null as assisted_gross_adds,
+ null as assisted_gross_add_spend,
+ null as OD,
+ null as ILS,
+ null as od_orders,
+ null as ils_orders,
+ null as cancel_orders,
+ null as promo_sub_cat,
+ null as promo
+FROM 
+ (SELECT
+   report_date                                                                            as report_date,
+   trim(platform_key_traffic)                                                             as platform_key,
+   coalesce(tf.country_code,'?')                                                          as country,
+   coalesce(region,'?')                                                                   as region,
+   coalesce(economic_area,'?')                                                            as economic_area,
+   coalesce(user_brand_affiliation,'unknown')                                             as brand,
+   coalesce(platform,'unknown')                                                           as platform,
+   case
+    when traffic_source in ('Managed Social','Paid User Referral','Promoted Social','Free Referral') 
+     then 'Social & Referral' 
+    when coalesce(traffic_source,'Unknown') in ('Unknown','Unknown Utm','?') then 'Unknown'
+    else traffic_source
+   end                                                                                    as traffic_source,
+   case 
+    when traffic_source in ('Email','Push Notification') then 'Push Channels'
+    when traffic_source in ('Direct','SEO') then 'Pull Channels'
+    when traffic_source in ('SEM','Affiliate','Managed Social','Paid User Referral','Promoted Social','Display') 
+     then 'Paid Channels'
+    else 'Other Channels' 
+   end                                                                                     as channel_group,
+   sum(uniq_visitors) as uniq_visitors_gpr
+  FROM user_edwprod.agg_gbl_traffic tf
+   JOIN (select distinct country_code from user_edwprod.agg_gbl_traffic_fin_deal) a on tf.country_code = a.country_code
+  WHERE report_date between current_date-10 and current_date-1 
+  GROUP BY 1,2,3,4,5,6,7,8,9
+ ) tf
+ JOIN user_groupondw.dim_day  dy on dy.day_rw = tf.report_date
+ JOIN user_groupondw.dim_week wk on dy.week_key = wk.week_key  
+ LEFT JOIN
+  (--Join in UV Adjustments
+   SELECT
+    report_date                                                                            as report_date,
+    trim(platform_key_traffic)                                                             as platform_key,
+    coalesce(country_code,'?')                                                             as country,
+    'groupon'                                                                              as brand,
+    coalesce(platform,'unknown')                                                           as platform,
+    case
+     when traffic_source in ('Managed Social','Paid User Referral','Promoted Social','Free Referral') 
+      then 'Social & Referral' 
+     when coalesce(traffic_source,'Unknown') in ('Unknown','Unknown Utm','?') then 'Unknown'
+     else traffic_source
+    end                                                                                    as traffic_source,
+    case 
+     when traffic_source in ('Email','Push Notification') then 'Push Channels'
+     when traffic_source in ('Direct','SEO') then 'Pull Channels'
+     when traffic_source in ('SEM','Affiliate','Managed Social','Paid User Referral','Promoted Social','Display') 
+      then 'Paid Channels'
+     else 'Other Channels' 
+    end                                                                                     as channel_group,
+    sum(unique_visitors_a) as uniq_visitors_adj
+   FROM sandbox.traffic_adjustments
+   WHERE report_date between 
+   GROUP BY 1,2,3,4,5,6,7
+  ) adj
+ on tf.report_date = adj.report_date
+ and tf.platform_key = adj.platform_key
+ and tf.country = adj.country
+ and tf.brand = adj.brand
+ and tf.platform = adj.platform
+ and tf.traffic_source = adj.traffic_source
+ and tf.channel_group = adj.channel_group;
+
+--COLLECT STATS
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(report_date);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(country);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(economic_area);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(traffic_source);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(channel_group);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(platform);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(platform_key);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(brand);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(business);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(vertical);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(grt_l1);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(grt_l2);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(segment);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(promo_day_type);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(promo_sub_cat);
+COLLECT STATS on sandbox.rev_mgmt_wbr_global column(promo);
+
+
+--UPDATE TIME VALUES
+UPDATE sandbox.rev_mgmt_wbr_global   
+FROM 
+(
+SELECT
+ CURRENT_DATE - 1 as today_date,
+ d.day_rw as report_date,
+ tw.week_end as report_week,
+ case 
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 0 then 'cw'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 1 then 'pw'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 2 then 'pw-1'
+  when trunc((cast(tw.week_end as date)-report_date)/7) in (3,4,5,6) then '4w'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 7 then '5w'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 52 then 'cw_py'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 53 then 'pw_py'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 54 then 'pw-1_py'
+  when trunc((cast(tw.week_end as date)-report_date)/7) in (55,56,57,58) then '4w_py'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 59 then '5w_py'
+  else 'other' 
+ end as time_period1,
+ case
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 0 then 'CW'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 1 then 'PW'
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 2 then 'PW-1'  
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 3 then 'PW-2'  
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 4 then 'PW-3'  
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 5 then 'PW-4'  
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 6 then 'PW-5'  
+  when trunc((cast(tw.week_end as date)-report_date)/7) = 7 then 'PW-6'  
+  else 'other' 
+ end as time_period2,
+ case
+  when report_date between today_date-365 and today_date then report_date
+  when report_date between today_date-731 and today_date-366 then report_date+364
+  else null
+ end as wbr_report_date,
+ cast(wbrw.week_end as date) as wbr_report_week,
+ case 
+  when report_date between today_date-365 and today_date then 'CY'
+  when report_date between today_date-731 and today_date-366 then 'PY'
+  else null  
+ end as wbr_year_type
+FROM user_groupondw.dim_day d
+ LEFT JOIN user_groupondw.dim_day td on td.day_rw = today_date
+ LEFT JOIN user_groupondw.dim_week tw on td.week_key = tw.week_key
+ LEFT JOIN user_groupondw.dim_day wbrd on wbrd.day_rw = wbr_report_date
+ LEFT JOIN user_groupondw.dim_week wbrw on wbrd.week_key = wbrw.week_key
+WHERE d.day_rw between '2016-01-01' and current_date-1
+) tp 
+SET 
+ time_period1= tp.time_period1,
+ time_period2= tp.time_period2, 
+ wbr_report_date = tp.wbr_report_date,
+ wbr_report_week = tp.wbr_report_week,
+ wbr_year_type = tp.wbr_year_type
+WHERE sandbox.rev_mgmt_wbr_global.report_date = tp.report_date;
+
+--UPDATE PROMO DAY VALUES
+UPDATE sandbox.rev_mgmt_wbr_global   
+FROM 
+(SELECT report_date, promo_cat, promo_sub_cat, promo
+ FROM sandbox.rev_mgmt_promo_calendar
+ ) pd
+SET 
+ promo_day_type= coalesce(pd.promo_cat,'None'),
+ promo_sub_cat=coalesce(pd.promo_sub_cat,'None'),
+ promo=coalesce(pd.promo,'None')
+WHERE sandbox.rev_mgmt_wbr_global.report_date = pd.report_date
+;
