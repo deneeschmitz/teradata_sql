@@ -1,0 +1,744 @@
+--LOAD TEMP TABLES WITH GOODS SPECIFIC DEAL ATTRIBUTES
+DELETE FROM sandbox.goods_deal_attributes_tmp1;
+INSERT INTO sandbox.goods_deal_attributes_tmp1
+SELECT
+ dd.uuid as deal_uuid,
+ case
+  when p.shipping_account_override is not null then p.effective_fulfillment_method
+  when upper(mm.fulfillment_method) like '%VENDOR%' then 'Drop ship (Supplier small parcel)'
+  when upper(mm.fulfillment_method) like '%GROUPON%' then 'Drop ship (Groupon small parcel)'
+ when gss.goods_deal_source not in ('stores_stores','goods_stores') then op.fulfillment_method
+ end as fulfillment_method,
+ case
+ when gss.goods_deal_source in ('stores_stores','goods_stores') and p.purchasability_region_id = 1 then 'Continental U.S. (excludes Alaska & Hawaii)'
+ when gss.goods_deal_source in ('stores_stores','goods_stores') and p.purchasability_region_id = 3 then 'Continental U.S. (includes Alaska & Hawaii)'
+ else coalesce(op.purchasability_region,'Unknown')
+ end as purchasability_region,
+ dopt.deal_max
+FROM user_groupondw.dim_deal dd
+ JOIN user_groupondw.dim_opportunity op on dd.opportunity_key = op.opportunity_key
+ JOIN user_groupondw.dim_merchant dm on dd.merchant_key = dm.merchant_key
+ LEFT JOIN (select deal_key, sum(max_pledges) as deal_max from user_groupondw.dim_deal_option group by 1) dopt on dd.deal_key = dopt.deal_key
+ LEFT JOIN user_groupondw.cm_prdct_dmapi_adapters pda on dd.uuid = pda.deal_uuid
+ LEFT JOIN user_groupondw.cm_products p on pda.product_id = p.id
+ LEFT JOIN user_groupondw.cm_product_merchants pm on pda.product_id = pm.product_id
+ LEFT JOIN user_groupondw.cm_merchants mm on pm.merchant_id = mm.id
+ LEFT JOIN
+  (select goods_deal_source, deal_uuid
+   from user_edwprod.dim_deal_unity
+   where goods_deal_source is not null and dwh_active = 1
+   group by 1,2
+  ) gss on dd.uuid = gss.deal_uuid
+WHERE op.record_type_key = 751005 or dm.uuid = '238cd09d-8d44-4443-ae09-6acc438b540e';
+COLLECT STATS on sandbox.goods_deal_attributes_tmp1 COLUMN (deal_uuid);
+COLLECT STATISTICS COLUMN (fulfillment_method, purchasability_region, deal_max) ON sandbox.goods_deal_attributes_tmp1;
+
+DELETE FROM sandbox.goods_deal_attributes_tmp2;
+INSERT INTO sandbox.goods_deal_attributes_tmp2
+SELECT pda.deal_uuid, mm."name" as cm_merchant_name, cc.slug as sor
+ FROM user_groupondw.cm_prdct_dmapi_adapters pda
+  LEFT JOIN user_groupondw.cm_products p on pda.product_id = p.id
+  LEFT JOIN user_groupondw.cm_product_merchants pm on pda.product_id  = pm.product_id
+  LEFT JOIN user_groupondw.cm_merchants mm on pm.merchant_id = mm.id
+  LEFT JOIN user_groupondw.cm_merchant_capabilities cmc on mm.id = cmc.merchant_id
+  LEFT JOIN user_groupondw.cm_capabilities cc on cc.id = cmc.capability_id;
+COLLECT STATS on sandbox.goods_deal_attributes_tmp2 COLUMN (deal_uuid);
+  
+DELETE FROM sandbox.goods_deal_attributes_tmp3;
+INSERT INTO sandbox.goods_deal_attributes_tmp3
+SELECT
+ dd.uuid as deal_uuid,
+ sp.merchant_name as stores_merchant_name,
+ case when mrt.third_category_name = '-1' then '' else mrt.third_category_name end as mrt_class,
+ case when mrt.fourth_category_name = '-1' then '' else mrt.fourth_category_name end as mrt_subclass
+FROM user_groupondw.dim_deal dd
+ JOIN user_groupondw.dim_opportunity op on dd.opportunity_key = op.opportunity_key
+ JOIN user_groupondw.dim_merchant dm on dd.merchant_key = dm.merchant_key
+ LEFT JOIN user_groupondw.cm_prdct_dmapi_adapters pda on dd.uuid = pda.deal_uuid
+ LEFT JOIN 
+  (select 
+    lower(substr(gin,1,8) || '-' ||  substr(gin,9,4) || '-' ||  substr(gin,13,4) || '-' ||  substr(gin,17,4) || '-' ||  substr(gin,21,12)) as deal_uuid,
+    lower(substr(category_uuid,1,8) || '-' ||  substr(category_uuid,9,4) || '-' ||  substr(category_uuid,13,4) || '-' ||  substr(category_uuid,17,4) || '-' ||  substr(category_uuid,21,12)) as category_uuid  
+   from user_gp.im_deal_instances  
+  ) di on dd.uuid = di.deal_uuid 
+ LEFT JOIN 
+  (select product_id,category_uuid 
+   from user_groupondw.cm_product_categories 
+   qualify row_number() over(partition by product_id order by category_depth desc) = 1
+  ) cat on pda.product_id = cat.product_id 
+ LEFT JOIN sandbox.stores_products sp on dd.uuid = sp.deal_uuid 
+ LEFT JOIN 
+  (select product_id,category_uuid 
+   from user_groupondw.store_product_categories 
+   qualify row_number() over(partition by product_id order by category_depth desc) = 1
+  ) spc on sp.product_id = spc.product_id
+ LEFT JOIN user_groupondw.dim_segment_category_map mrt on coalesce(spc.category_uuid, cat.category_uuid, di.category_uuid) = mrt.category_id 
+WHERE op.record_type_key = 751005 or dm.uuid = '238cd09d-8d44-4443-ae09-6acc438b540e';
+COLLECT STATS on sandbox.goods_deal_attributes_tmp3 COLUMN (deal_uuid);
+COLLECT STATISTICS COLUMN (mrt_class, mrt_subclass) ON sandbox.goods_deal_attributes_tmp3;
+
+DELETE FROM sandbox.goods_deal_attributes_tmp4;
+INSERT INTO sandbox.goods_deal_attributes_tmp4
+SELECT
+ dd.uuid as deal_uuid,
+ case
+  when dd.opportunity_key = 7472207356 then coalesce(nb3.brand_name,cb.brand_manufacturer,trim(p.brand_manufacturer))
+  when dd.opportunity_key = 5552768191 then coalesce(nb2.brand_name,sp.brand)
+  else coalesce(nb1.brand_name,op.brand_manufacturer)
+ end as brand_manufacturer
+FROM user_groupondw.dim_deal dd
+ JOIN user_groupondw.dim_opportunity op on dd.opportunity_key = op.opportunity_key
+ JOIN user_groupondw.dim_merchant dm on dd.merchant_key = dm.merchant_key 
+ LEFT JOIN user_groupondw.cm_prdct_dmapi_adapters pda on dd.uuid = pda.deal_uuid
+ LEFT JOIN user_groupondw.cm_products p on pda.product_id = p.id
+ LEFT JOIN sandbox.cm_brands cb on p.id = cb.product_id
+ LEFT JOIN sandbox.stores_products sp on dd.uuid = sp.deal_uuid 
+ LEFT JOIN 
+  (select lower(brand_alias) as brand_alias, brand_name
+   from user_groupondw.dim_normalized_brand
+   qualify row_number() over (partition by lower(brand_alias) order by brand_name) = 1
+  ) nb1 on lower(op.brand_manufacturer) = nb1.brand_alias
+ LEFT JOIN 
+  (select lower(brand_alias) as brand_alias, brand_name
+   from user_groupondw.dim_normalized_brand
+   qualify row_number() over (partition by lower(brand_alias) order by brand_name) = 1
+  ) nb2 on lower(sp.brand) = nb2.brand_alias
+ LEFT JOIN 
+  (select lower(brand_alias) as brand_alias, brand_name
+   from user_groupondw.dim_normalized_brand
+   qualify row_number() over (partition by lower(brand_alias) order by brand_name) = 1
+  ) nb3 on lower(cb.brand_manufacturer) = nb3.brand_alias
+WHERE op.record_type_key = 751005 or dm.uuid = '238cd09d-8d44-4443-ae09-6acc438b540e';
+COLLECT STATS on sandbox.goods_deal_attributes_tmp4 COLUMN (deal_uuid);
+
+--LOAD TEMP TABLES WITH OPPORTUNITY SPECIFIC DEAL ATTRIBUTES
+DELETE FROM sandbox.rev_mgmt_da_tmp1;
+INSERT INTO sandbox.rev_mgmt_da_tmp1
+SELECT
+  op.opportunity_key                                                                             as opportunity_key,
+  op.opportunity_id                                                                              as opportunity_id,
+  op.opportunity_name                                                                            as opportunity_name,
+  case when op.partner_deal_source = '' then null else op.partner_deal_source end                as partner_deal_source,
+  op.credit_card_fee_pct                                                                         as credit_card_fee_pct,
+  ma.getaways_merchandising_region                                                               as getaways_merchandising_region,
+  ma.national_vertical                                                                           as national_vertical,
+  ma.account_id                                                                                  as account_id,
+  ma.parent_account_id                                                                           as parent_account_id,
+  pa.account_name                                                                                as parent_account_name,
+  case 
+   when sfa.Type__c in ('Local','Home & Auto') then sfa.merchant_segmentation__c 
+   else 'not rated' 
+  end                                                                                            as metal_current,
+  sfd.merchant_seg_at_closed_won                                                                 as metal_at_close,
+  case when sfa.Type__c in ('Enterprise') then 1 else 0 end                                      as enterprise_flag,
+  case when op.opportunity_key not in (7472207356,5552768191) then op.opp_id end                 as nongateway_contract_id,
+  case when op.opportunity_key not in (7472207356,5552768191) then dgp.email end                 as nongateway_opp_owner_email,
+  case when op.opportunity_key not in (7472207356,5552768191) then op.feature_date end           as nongateway_feature_date,
+  case when op.opportunity_key not in (7472207356,5552768191) then op.feature_end_date end       as nongateway_feature_end_date,
+  case when op.opportunity_key not in (7472207356,5552768191) then op.fulfillment_provider end   as fulfillment_provider,
+  sfa.one_feature_only                                                                           as one_feature_only,
+  sfa.account_manager                                                                            as account_manager,
+  sfp.full_name                                                                                  as current_account_owner,  
+  reps.current_owner_team                                                                        as current_owner_team,
+  reps.current_owner_role                                                                        as current_owner_role,
+  case when ff.account__c is not null then 1 else 0 end                                          as franchise_flag,
+  case when dgp.person_id = '005C0000005Nn0xIAC' then 1 else 0 end                               as is_s3,
+  sfa.Type__c                                                                                    as account_type,
+  case
+   when sfa.National_Vertical = 'CPG' then 'Retail'
+   when sfa.National_Vertical = 'Customizable' then 'Retail'
+   when sfa.National_Vertical = 'Multi-Channel Retail' then 'Retail'
+   when sfa.National_Vertical = 'Online' then 'Retail'
+   when sfa.subcategory_v3 = 'Jumping' then 'TTD'
+   when sfa.services_offered like any ('%Consultant - Nutritional / Weight-Loss%','%Consultant - Counselor / Therapist%','%Gymnastics%','%Beauty School%','%Personal Chef%','%Personal Stylist%','%Rehabilitation Center%','%Boxing / Kickboxing - Training%') then 'HBW'
+   when sfa.subcategory_v3 in ('Tattoo & Piercing','Workout & Fitness') then 'HBW'
+   when sfa.subcategory_v3 in ('Boat Rental','Sporting Rental','Winery / Distillery / Brewery','Consulting Services') then 'TTD'
+   when sfa.subcategory_v3 in ('Professional Photography, Photo Printing, Framing','Subscriptions') then 'Retail'
+   when sfa.subcategory_v3 like 'Courses%' then 'TTD'
+   when sfa.category_v3 like '%Food%' then 'F&D'
+   when sfa.category_v3 like '%Beauty%' then 'HBW'
+   when sfa.category_v3 like '%Leisure%' then 'TTD'
+   when sfa.category_v3 = 'Tickets' then 'TTD'
+   when sfa.category_v3 = 'Services' then 'H&A'
+   when sfa.category_v3 = 'Shopping' then 'Retail'
+   when sfa.category_v3 = 'Goods' then 'Retail'
+   else sfa.category_v3
+  end as account_vertical_raw,
+  case when op.payment_terms = 'Redemption System' then 1 else 0 end as por_flag
+FROM user_groupondw.dim_opportunity op
+  LEFT JOIN user_groupondw.dim_merchant_account      ma on op.account_key = ma.account_key
+  LEFT JOIN user_groupondw.dim_merchant_account      pa on ma.parent_account_id = pa.account_id
+  LEFT JOIN user_groupondw.dim_sf_person            sfp on ma.sf_user_acct_owner_key = sfp.person_key
+  LEFT JOIN dwh_base_sec_view.sf_deal_attribute     sfd on op.deal_attribute = sfd.id 
+  LEFT JOIN dwh_base_sec_view.sf_account            sfa on op.account_id = sfa.account_id_18
+  LEFT JOIN user_dw.v_dim_groupon_person            dgp on op.person_key = dgp.person_key
+  LEFT JOIN 
+   (select account__c
+    from dwh_base_sec_view.sf_tag
+    where name = 'Chain' and isdeleted = 'false'
+    ) ff on ff.account__c = ma.account_id
+  LEFT JOIN
+   (select emplid, team as current_owner_team, role_rw as current_owner_role
+    from sandbox.ops_roster_master 
+    qualify row_number() over (partition by emplid order by start_date_key desc) =1
+   ) reps on sfp.ultipro_id = reps.emplid
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28;
+COLLECT STATS ON sandbox.rev_mgmt_da_tmp1 COLUMN(opportunity_key);
+
+DELETE FROM sandbox.rev_mgmt_da_tmp2;
+INSERT INTO sandbox.rev_mgmt_da_tmp2
+SELECT
+  dd.uuid as deal_id,
+  trim(coalesce(op.venue_name,dd.venue_name))                                                    as venue,
+  case
+   when lower(dmp.inv_service_id) = 'mrgetaways' then 'Market Rate'
+   else coalesce(op.booking_voucher,'Voucher') 
+  end                                                                                            as getaways_booking_type,
+  case
+   when dom."name" = 'Abilene, TX' then 'Multimarket' 
+   else dom."name" 
+  end                                                                                            as market,
+  coalesce(mkt.market_rank,0)                                                                    as market_rank,
+  mkt.mkt_permalink                                                                              as mkt_permalink,
+  mkt.market_group                                                                               as market_group,
+  mkt.clo_flag                                                                                   as clo_flag,
+  mkt.region                                                                                     as region,
+  mkt.state                                                                                      as state,
+  mkt.country                                                                                    as country,
+  mkt.msa                                                                                        as msa,
+  mkt."timezone"                                                                                 as timezone
+FROM user_groupondw.dim_deal dd
+ LEFT JOIN 
+  (select deal_uuid, min(inv_service_id) as inv_service_id
+   from user_edwprod.deal_merch_product
+   where inv_service_id is not null
+   group by 1
+  ) dmp on dmp.deal_uuid = dd.uuid
+ LEFT JOIN user_groupondw.dim_opportunity  op on dd.opportunity_key = op.opportunity_key
+ LEFT JOIN user_groupondw.dim_domain      dom on case when dmp.inv_service_id = 'tpis' then dd.domain_key else op.domain_key end = dom.domain_key
+ LEFT JOIN sandbox.rev_mgmt_market_rank   mkt on dom."name" = mkt.market;
+COLLECT STATS ON sandbox.rev_mgmt_da_tmp2 COLUMN(deal_id);
+
+--LOAD INITIAL DEAL ATTRIBUTES INTO STAGE TABLE
+DELETE FROM sandbox.rev_mgmt_deal_attributes_stg2;
+INSERT INTO sandbox.rev_mgmt_deal_attributes_stg2
+ (deal_id, vertical, grt_l1_cat_name, grt_l2_cat_name, grt_l3_cat_name, permalink, pds_cat_id, deal_key,
+  supply_channel, demand_channel, grt_l4_cat_name, grt_l5_cat_name, tpis_partner,
+  inventory_service, promo_exclusion_flag, merchant_key, deal_title, is_gateway,
+  fulfillment_method, purchasability_region, goods_cat1, dmm_subcat, mrt_category, mrt_subcategory,
+  mrt_class, mrt_subclass, brand_manufacturer, deal_max, star_rating, num_reviews, hybrid_flag,
+  sor, start_date, end_date, opportunity_key)
+SELECT
+  lob.deal_id                                                                                    as deal_id,
+  case
+   when lob.grt_l1_cat_name = 'L1 - Travel' then 'Travel'
+   when lob.grt_l2_cat_description = 'TTD' then trim(substr(lob.grt_l2_cat_name,6,30))
+   else coalesce(lob.grt_l2_cat_description,'unknown')
+  end                                                                                            as vertical,
+  case when lob.grt_l1_cat_name like 'L1%' then lob.grt_l1_cat_name else 'unknown' end           as grt_l1_cat_name,
+  case 
+   when lob.grt_l2_cat_name = 'multi' then grt.grt_l2_cat_name
+   when lob.grt_l2_cat_name like 'L2%' then lob.grt_l2_cat_name else 'unknown' 
+  end                                                                                            as grt_l2_cat_namex,
+  case 
+   when lob.grt_l3_cat_name = 'multi' then grt.grt_l3_cat_name
+   when lob.grt_l3_cat_name like 'L3%' then lob.grt_l3_cat_name else 'unknown' 
+  end                                                                                            as grt_l3_cat_namex,
+  coalesce(lob.deal_permalink,dd.permalink)                                                      as permalink,
+  lob.pds_cat_id                                                                                 as pds_cat_id,
+  trim(dd.deal_key)                                                                              as deal_key,
+  case
+     when gss.goods_deal_source = 'goods_stores' and gds2.sor = 'ssor' then 'Goods SSOR'
+     when lob.grt_l1_cat_name = 'L1 - Shopping' and coalesce(lob.deal_permalink,dd.permalink) like 'gg-%' 
+      and lob.supply_channel = 'N/A' then 'Goods'
+     when gss.goods_deal_source = 'goods_stores' then 'Goods Connected Supply'
+     when gss.goods_deal_source = 'stores_stores' then 'Goods Stores'
+     else lob.supply_channel
+  end                                                                                            as supply_channel,  
+  gdd1.demand_channel                                                                            as demand_channel,
+  grt.grt_l4_cat_name                                                                            as grt_l4_cat_name,
+  grt.grt_l5_cat_name                                                                            as grt_l5_cat_name,  
+  case when dmp.inv_service_id = 'tpis' then dd.merchant_name else null end                      as tpis_partner,
+  dmp.inv_service_id                                                                             as inventory_service,
+  coalesce(gi.promo_exclusion_flag,0)                                                            as promo_exclusion_flag,
+  dd.merchant_key                                                                                as merchant_key,
+  dd.title_rw                                                                                    as deal_title,
+  case when pda.deal_uuid is not null then 1 else 0 end                                          as is_gateway, 
+  case when gds2.sor = 'ssor' then 'SSOR' else gds1.fulfillment_method end                       as fulfillment_method,
+  gds1.purchasability_region                                                                     as purchasability_region,
+  case 
+   when coalesce(grt_l3_cat_namex,'unknown') = 'unknown' then 'unknown' 
+   else substr(grt_l3_cat_namex,6,length(grt_l3_cat_namex)-5) 
+  end                                                                                            as goods_cat1,
+  case 
+   when coalesce(grt_l4_cat_name,'unknown') = 'unknown' then 'unknown' 
+   else substr(grt_l4_cat_name,6,length(grt_l4_cat_name)-5) 
+  end                                                                                            as dmm_subcat,
+  case 
+   when coalesce(grt_l3_cat_namex,'unknown') = 'unknown' then 'unknown' 
+   else substr(grt_l3_cat_namex,6,length(grt_l3_cat_namex)-5) 
+  end                                                                                            as mrt_category,
+  case 
+   when coalesce(grt_l4_cat_name,'unknown') = 'unknown' then 'unknown' 
+   else substr(grt_l4_cat_name,6,length(grt_l4_cat_name)-5) 
+  end                                                                                            as mrt_subcategory,
+  gds3.mrt_class                                                                                 as mrt_class,
+  gds3.mrt_subclass                                                                              as mrt_subclass,
+  gds4.brand_manufacturer                                                                        as brand_manufacturer,
+  gds1.deal_max                                                                                  as deal_max,
+  sr.star_rating                                                                                 as star_rating,
+  sr.num_reviews                                                                                 as num_reviews,
+  case when hy.deal_id is not null then 1 else 0 end                                             as hybrid_flag,
+  gds2.sor                                                                                       as sor,
+  lob.start_date                                                                                 as start_date,
+  lob.end_date                                                                                   as end_date,
+  dd.opportunity_key                                                                             as opportunity_key
+FROM 
+ (select 
+   deal_id, grt_l1_cat_name, grt_l2_cat_name, grt_l2_cat_description, grt_l3_cat_name, 
+   deal_permalink, pds_cat_id,
+   min(deal_supply_channel) as supply_channel,
+   min(lob.start_date) as start_date,
+   max(lob.end_date) as end_date      
+  from user_edwprod.dim_gbl_deal_lob lob
+  where lob.platform_key in (1,2,11) and country_code in ('US','CA') and lob.deal_id <> '-1'
+  group by 1,2,3,4,5,6,7
+ ) lob
+  LEFT JOIN user_groupondw.dim_deal                  dd on lob.deal_id = dd.uuid
+  LEFT JOIN sandbox.goods_deal_attributes_tmp1     gds1 on lob.deal_id = gds1.deal_uuid
+  LEFT JOIN sandbox.goods_deal_attributes_tmp2     gds2 on lob.deal_id = gds2.deal_uuid
+  LEFT JOIN sandbox.goods_deal_attributes_tmp3     gds3 on lob.deal_id = gds3.deal_uuid
+  LEFT JOIN sandbox.goods_deal_attributes_tmp4     gds4 on lob.deal_id = gds4.deal_uuid
+  LEFT JOIN user_groupondw.dim_merchant              dm on dd.merchant_key = dm.merchant_key 
+  LEFT JOIN user_groupondw.cm_prdct_dmapi_adapters  pda on lob.deal_id = pda.deal_uuid
+  LEFT JOIN 
+   (select distinct da.deal_id
+    from sandbox.goods_hybrid_procurement hy
+     join user_groupondw.dim_multi_deal md on hy.upc = md.product_sku
+     join user_groupondw.dim_deal_option dop on md.inventory_product_id = dop.inventory_product_id
+     join sandbox.rev_mgmt_deal_attributes da on dop.deal_key = da.deal_key
+   ) hy on lob.deal_id = hy.deal_id
+  LEFT JOIN 
+   (select deal_uuid, min(inv_service_id) as inv_service_id
+    from user_edwprod.deal_merch_product
+    where inv_service_id is not null
+    group by 1
+   ) dmp on dmp.deal_uuid = dd.uuid
+  LEFT JOIN
+   (select deal_uuid, case when coalesce(efgi_flag,1) = 0 then 1 else 0 end as promo_exclusion_flag
+    from user_gp.dim_deal_grpn_incentive
+   ) gi on gi.deal_uuid = dd.uuid
+  LEFT JOIN
+   (select deal_uuid, goods_deal_source
+    from user_edwprod.dim_deal_unity
+    where goods_deal_source is not null and dwh_active = 1
+    group by 1,2
+   ) gss on lob.deal_id = gss.deal_uuid
+  LEFT JOIN
+   (select gdd.ref_deal_id, min(dc.deal_channel_desc) as demand_channel
+    from user_groupondw.gbl_dim_deal gdd
+     left join user_dw.v_dim_deal_channel dc on dc.deal_channel_key = gdd.deal_demand_channel_key
+    where gdd.platform_key in (1,2) and country_key in (235,40)
+    group by 1
+   ) gdd1 on gdd1.ref_deal_id = trim(cast(dd.deal_key as varchar(64)))
+  LEFT JOIN
+   (select deal_uuid, grt_l2_cat_name, grt_l3_cat_name, grt_l4_cat_name, grt_l5_cat_name from 
+    (select dmp.deal_uuid, pgm.grt_l2_cat_name, pgm.grt_l3_cat_name, pgm.grt_l4_cat_name, pgm.grt_l5_cat_name, count(*) as nbr_options
+     from user_edwprod.deal_merch_product dmp
+      join user_dw.v_dim_pds_grt_map pgm on dmp.primary_dealservice_cat_id = pgm.pds_cat_id
+     group by 1,2,3,4,5
+    ) x
+   qualify row_number() over (partition by deal_uuid order by nbr_options desc) =1     
+   ) grt on grt.deal_uuid = lob.deal_id
+  LEFT JOIN
+   (select distinct dm.merchant_key, average(int_value) as star_rating, count(distinct id) as num_reviews
+    from user_gp.ugc_answer a
+     left join user_groupondw.dim_merchant dm on a.merchant_uuid = dm.uuid
+    where question_key in ('generalRating')
+    group by 1
+   ) sr on sr.merchant_key = dd.merchant_key
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35;
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes_stg2 COLUMN (deal_id);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes_stg2 COLUMN (opportunity_key);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes_stg2 COLUMN (pds_cat_id);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes_stg2 COLUMN (deal_key);
+
+--UPDATE STAGE TABLE WITH OPPORTUNITY RELATED ATTRIBUTES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM sandbox.rev_mgmt_da_tmp1 x
+SET 
+ opportunity_id = x.opportunity_id,
+ opportunity_name = x.opportunity_name,
+ partner_deal_source = x.partner_deal_source,
+ credit_card_fee_pct = x.credit_card_fee_pct,
+ getaways_merchandising_region = x.getaways_merchandising_region,
+ national_vertical = x.national_vertical,
+ account_id = x.account_id,
+ parent_account_id = x.parent_account_id,
+ parent_account_name = x.parent_account_name,
+ metal_current = x.metal_current,
+ metal_at_close = x.metal_at_close,
+ enterprise_flag = x.enterprise_flag,
+ nongateway_contract_id = x.nongateway_contract_id,
+ nongateway_opp_owner_email = x.nongateway_opp_owner_email,
+ nongateway_feature_date = x.nongateway_feature_date,
+ nongateway_feature_end_date = x.nongateway_feature_end_date,
+ fulfillment_provider = x.fulfillment_provider,
+ one_feature_only = x.one_feature_only,
+ account_manager = x.account_manager,
+ current_account_owner = x.current_account_owner,
+ current_owner_team = x.current_owner_team,
+ current_owner_role = x.current_owner_role,
+ franchise_flag = x.franchise_flag,
+ is_s3 = x.is_s3,
+ account_type = x.account_type,
+ account_vertical = 
+  case 
+   when grt_l1_cat_name = 'L1 - Shopping' then 'Goods'
+   when x.account_vertical_raw = 'TTD' and grt_l3_cat_name like '%Leisure%' then 'TTD - Leisure'
+   when x.account_vertical_raw = 'TTD' then 'TTD - Live'
+   else x.account_vertical_raw
+  end,
+ por_flag = x.por_flag
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.opportunity_key = x.opportunity_key;
+
+--UPDATE STAGE TABLE WITH MORE OPPORTUNITY RELATED ATTRIBUTES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM sandbox.rev_mgmt_da_tmp2 x
+SET
+ venue = x.venue,
+ getaways_booking_type = case when vertical = 'Travel' then x.getaways_booking_type end,
+ market = x.market,
+ market_rank = x.market_rank,
+ mkt_permalink = x.mkt_permalink,
+ market_group = x.market_group,
+ clo_flag = x.clo_flag,
+ region = x.region,
+ state = x.state,
+ country = x.country,
+ msa = x.msa,
+ timezone = x.timezone
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_id;
+
+--UPDATE STAGE TABLE WITH LIFETIME SITE IMPRESSIONS
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET lifetime_site_impressions = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (select deal_id, sum(cast(total_impressions as bigint)) as lifetime_site_impressions
+  from user_edwprod.agg_gbl_impressions_deal 
+  where economic_area = 'NA' and platform_key_traffic in (1,2) and deal_id <> '-1' and report_date >= '2016-01-01'
+  group by 1
+ ) x
+SET lifetime_site_impressions = x.lifetime_site_impressions
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_id;
+
+--UPDATE STAGE TABLE WITH LIFETIME EMAIL IMPRESSIONS
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET lifetime_email_impressions = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (select deal_id, sum(cast(total_sd_opens as bigint)) as lifetime_email_impressions
+  from user_edwprod.gbl_email_impression_agg_opens
+  where economic_area = 'NA' and platform_key in (1,2) and deal_id <> '-1' and report_date >= '2016-01-01'
+  group by 1
+ ) x
+SET lifetime_email_impressions = x.lifetime_email_impressions
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_id;
+
+--UPDATE STAGE TABLE WITH LIFETIME FINANCIAL VALUES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET 
+ lifetime_nob = 0, lifetime_nor = 0, lifetime_dvs = 0,
+ lifetime_conversion = 0, lifetime_norpm = 0, lifetime_margin = 0, lifetime_wapp = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (select 
+   f.deal_id,
+   sum(cast(nob_USD as float)) as lifetime_nob,
+   sum(cast(nor_USD as float)) as lifetime_nor,
+   sum(cast(uniq_deal_view_visitors as bigint)) as lifetime_dvs,
+   sum(cast(transactions as bigint)) as lifetime_orders,
+   sum(cast(transactions_qty as bigint)) as lifetime_units         
+  from user_edwprod.agg_gbl_traffic_fin_deal f
+  where economic_area = 'NA' and platform_key_traffic in (1,2) and f.deal_id <> '-1' and report_date >= '2016-01-01' 
+  group by 1 
+ ) x
+SET 
+ lifetime_nob = x.lifetime_nob,
+ lifetime_nor = x.lifetime_nor,
+ lifetime_dvs = x.lifetime_dvs,
+ lifetime_conversion = cast(x.lifetime_orders as decimal(12,4)) / cast(nullifzero(x.lifetime_dvs) as decimal(18,4)),
+ lifetime_norpm = cast(x.lifetime_nor as decimal(12,4)) / (cast(nullifzero(lifetime_email_impressions) as decimal(18,4)) + cast(nullifzero(lifetime_site_impressions) as decimal(18,4))) * 1000,
+ lifetime_margin = x.lifetime_nor/nullifzero(x.lifetime_nob),
+ lifetime_wapp = x.lifetime_nob/nullifzero(x.lifetime_units)
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_id;
+
+--UPDATE STAGE TABLE WITH LIFETIME DEAL DAYS LIVE AND NODES LIVE VALUES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET lifetime_ddl = 0, lifetime_dnl = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (select deal_uuid, sum(deals_live) as lifetime_ddl, sum(nodes_live) as lifetime_dnl
+  from sandbox.eh_deal_counts
+  where report_date >= '2016-01-01'
+  group by 1
+ ) x
+SET lifetime_ddl = x.lifetime_ddl, lifetime_dnl = x.lifetime_dnl
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_uuid;
+
+--UPDATE STAGE TABLE WITH PDS NAMES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM user_groupondw.dim_category x
+SET pds_name = x."name"
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.pds_cat_id = x.category_id;
+
+--UPDATE STAGE TABLE WITH DYNAMIC PRICING FLAG AND OPTIONS ATTRIBUTES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET dp_eligible = 0, nbr_options = 0, nbr_options_live = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (select 
+   deal_key, 
+   max(is_dynamic_pricing_enabled) as dp_eligible,
+   count(distinct deal_option_key) as nbr_options, 
+   count(distinct case when status='active' then deal_option_key else null end) as nbr_options_live,
+   min(cost_to_user) as min_option_price,
+   min(cost_to_groupon) as min_option_cost,
+   min(value_rw) as min_option_value,
+   max(cost_to_user) as max_option_price,
+   max(cost_to_groupon) as max_option_cost,
+   max(value_rw) as max_option_value,
+   median(cost_to_user) as median_option_price,
+   median(cost_to_groupon) as median_option_cost,
+   median(value_rw) as median_option_value
+  from user_groupondw.dim_deal_option
+  where deal_key is not null
+  group by 1
+ ) x
+SET 
+ dp_eligible = x.dp_eligible,
+ nbr_options = x.nbr_options,
+ nbr_options_live = x.nbr_options_live,
+ min_option_price = x.min_option_price,
+ min_option_cost = x.min_option_cost,
+ min_option_value = x.min_option_value,
+ max_option_price = x.max_option_price,
+ max_option_cost = x.max_option_cost,
+ max_option_value = x.max_option_value,
+ median_option_price = x.median_option_price,
+ median_option_cost = x.median_option_cost,
+ median_option_value = x.median_option_value
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_key = x.deal_key;
+
+--UPDATE STAGE TABLE WITH RES VALUES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+(SELECT
+  dd.uuid as deal_uuid,
+  cast(max(coalesce(dd.user_max_window, 0)) as SMALLINT) as repurchase_window,
+  cast(max(coalesce(nc.ind, 0)) as SMALLINT) as New_Clients_Res,
+  cast(max(coalesce(tdr.ind, 0)) as SMALLINT) as Tm_Dt_Res,
+  cast(max(coalesce(af.ind, 0)) as SMALLINT) as Add_Fee_Res,
+  cast(max(coalesce(msr.ind, 0)) as SMALLINT) as Menu_Ser_Res,
+  cast(max(coalesce(pur.ind, 0)) as SMALLINT) as Repurchase_Res
+ FROM
+  (select 
+    uuid,
+    regexp_replace(regexp_replace(regexp_replace(lower(fine_print), '\bthree\b', '3'), '\bsix\b', '6'), '-', ' ') as fine_print1,
+    case
+     when regexp_similar(fine_print1, '.*may be repurchased every[\sa-z]*\d+\s+day.*', 'i') = 1
+      then cast(regexp_replace(regexp_replace(fine_print1, '(.*?)may be repurchased every[\sa-z]*(\d+)[\s]*da[ys|y](.*)', '\2'), ' ', '') as SMALLINT)
+     when regexp_similar(fine_print1, '.*may be repurchased every[\sa-z]*\d+\s+week.*', 'i') = 1
+      then cast(regexp_replace(regexp_replace(fine_print1,'(.*?)may be repurchased every[\sa-z]*(\d+)\s+wee[ks|k](.*)', '\2'), ' ', '') * 7 as SMALLINT)
+     when regexp_similar(fine_print1, '.*may be repurchased every[\sa-z]*\d+\s+month.*', 'i') = 1
+      then cast(regexp_replace(regexp_replace(fine_print1,'(.*?)may be repurchased every[\sa-z]*(\d+)\s+mont[hs|h](.*)', '\2'), ' ', '') * 30 as SMALLINT)
+     when regexp_similar(fine_print1, '.*may be repurchased every[\sa-z]*\d+\s+year.*', 'i') = 1
+      then cast(regexp_replace(regexp_replace(fine_print1,'(.*?)may be repurchased every[\sa-z]*(\d+)\s+yea[rs|r](.*)', '\2'), ' ', '') * 365 as SMALLINT)
+     when regexp_similar(fine_print1, '.*may be repurchased every[\sa-z]*\d+(\.|$)', 'i') = 1
+      then cast(regexp_replace(regexp_replace(fine_print1, '(.*?)may be repurchased every[\sa-z]*\b(\d+)\b(.*)', '\2'), ' ', '') as SMALLINT)
+     else 0
+    end as user_max_window
+   from user_groupondw.dim_deal
+  ) dd
+ LEFT JOIN (select text_res, 1 as ind from sandbox.kg_deal_structure_res where restrict_type = 'New Clients') nc 
+  on regexp_substr(dd.fine_print1, nc.text_res, 1, 1, 'i') = nc.text_res
+ LEFT JOIN (select text_res,1 as ind from sandbox.kg_deal_structure_res where restrict_type = 'Time/Date Restrictions') tdr 
+  on regexp_substr(dd.fine_print1, tdr.text_res, 1, 1, 'i') = tdr.text_res
+ LEFT JOIN (select text_res,1 as ind from sandbox.kg_deal_structure_res where restrict_type = 'Holiday Restrictions') hdr 
+  on regexp_substr(dd.fine_print1, hdr.text_res, 1, 1, 'i') = hdr.text_res
+ LEFT JOIN (select text_res,1 as ind from sandbox.kg_deal_structure_res where restrict_type = 'Additional Fees') af 
+  on regexp_substr(dd.fine_print1, af.text_res, 1, 1, 'i') = af.text_res
+ LEFT JOIN (select text_res,1 as ind from sandbox.kg_deal_structure_res where restrict_type = 'Menu/Service restrictions') msr 
+  on regexp_substr(dd.fine_print1, msr.text_res, 1, 1, 'i') = msr.text_res
+ LEFT JOIN (select text_res,1 as ind from sandbox.kg_deal_structure_res where restrict_type = 'Repurchase restrictions') pur 
+  on regexp_substr(dd.fine_print1, pur.text_res, 1, 1, 'i') = pur.text_res
+ GROUP BY 1
+ ) x
+SET 
+ new_clients_res = x.new_clients_res,
+ tm_dt_res = x.tm_dt_res,
+ add_fee_res = x.add_fee_res,
+ menu_ser_res = x.menu_ser_res,
+ repurchase_res = x.repurchase_res,
+ repurchase_window = x.repurchase_window
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_uuid;
+
+--UPDATE STAGE TABLE WITH WOW DEAL FLAG
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET wow_deal = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+--FROM (select distinct wow_deal_id from sandbox.pp_incentives_dim where wow_deal_id is not null and wow_flag=1) x
+FROM (select distinct deal_key from sandbox.cm_subsidized_deals) x
+SET wow_deal = 1
+--WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.wow_deal_id
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_key = x.deal_key;
+
+--UPDATE STAGE TABLE WITH ZERO DOLLAR DEAL FLAG
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET zero_dollar_deal = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (SELECT deal_id, sum(transactions_qty) as zdd_qty, sum(gross_bookings_USD) as zdd_gb, 1 as zero_dollar_deal_flag
+  FROM user_edwprod.agg_gbl_financials_deal_usd
+  WHERE country_code in ('US','CA')
+  GROUP BY 1
+  HAVING zdd_qty>0 and zdd_gb<=0
+ ) x
+SET zero_dollar_deal = x.zero_dollar_deal_flag
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_id;
+
+--UPDATE STAGE TABLE WITH ACCOUNT NAMES
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM
+(SELECT
+  deal.uuid as deal_uuid,
+  case
+   when da.supply_channel in ('Goods Connected Supply') then gds2.cm_merchant_name
+   when da.supply_channel in ('Goods Stores') then gds3.stores_merchant_name
+   when da.supply_channel in ('Goods SSOR') then gds2.cm_merchant_name
+   --when da.supply_channel in ('Goods SSOR') and deal.opportunity_key = '-1' then gds2.cm_merchant_name
+   --when da.supply_channel in ('Goods SSOR') and deal.opportunity_key <> '-1' then gds3.stores_merchant_name
+   else coalesce(ma.account_name,dm."name")
+  end as account_name
+ FROM user_groupondw.dim_deal deal 
+  JOIN user_groupondw.dim_opportunity op on deal.opportunity_key = op.opportunity_key
+   LEFT JOIN sandbox.rev_mgmt_deal_attributes_stg2 da on deal.uuid = da.deal_id
+   LEFT JOIN user_groupondw.dim_merchant_account ma on op.account_key = ma.account_key
+   LEFT JOIN sandbox.goods_deal_attributes_tmp2 gds2 on deal.uuid = gds2.deal_uuid
+   LEFT JOIN sandbox.goods_deal_attributes_tmp3 gds3 on deal.uuid = gds3.deal_uuid
+   LEFT JOIN user_groupondw.dim_merchant dm on deal.merchant_key = dm.merchant_key
+ WHERE deal.uuid is not null
+ GROUP BY 1,2
+) x
+SET account_name = x.account_name
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_uuid;
+
+--UPDATE STAGE TABLE WITH VFM CAP
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET vfm_cap = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (select deal_uuid, promotional_adj_pct
+  from dwh_base_sec_view.sf_opportunity_2 
+  where promotional_adj_pct is not null
+ ) x
+SET vfm_cap = x.promotional_adj_pct
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_id = x.deal_uuid;
+
+--UPDATE STAGE TABLE WITH FREE TO CLAIM FLAG
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+SET free_to_claim_flag = 0;
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM 
+ (select dop.deal_key, sum(p.min_unit_price) as min_unit_price_all_opts
+  from user_groupondw.dim_deal_option dop
+   join
+    (select lower(product_id) as product_id, min(unit_price_value_unscaled) as min_unit_price, max(unit_price_value_unscaled) as max_unit_price
+     from user_gp.price_update_history
+     where unit_price_currency_code in ('USD','CAD')
+     group by 1
+    ) p on p.product_id = oreplace(dop.inventory_product_id,'-','')
+   where dop.deal_key is not null
+   group by 1
+  having sum(p.min_unit_price) =0
+ ) x
+SET free_to_claim_flag = 1
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.deal_key = x.deal_key;
+
+--UPDATE STAGE TABLE WITH GETAWAYS SALES HIERARCHY
+UPDATE sandbox.rev_mgmt_deal_attributes_stg2
+FROM sandbox.getaways_merch_slot_v2 x
+SET
+ getaways_mkt_category = case when vertical = 'Travel' then x.mkt_category end,
+ getaways_sales_region = case when vertical = 'Travel' then x.getaways_sales_region end,
+ getaways_sales_cluster = case when vertical = 'Travel' then x.getaways_sales_cluster end,
+ getaways_sales_subregion = case when vertical = 'Travel' then x.getaways_sales_subregion end
+WHERE sandbox.rev_mgmt_deal_attributes_stg2.getaways_merchandising_region = x.getaways_merchandising_region;
+
+--LOAD DEAL ATTRIBUTES PROD TABLE
+DELETE FROM sandbox.rev_mgmt_deal_attributes;
+INSERT INTO sandbox.rev_mgmt_deal_attributes SELECT * FROM sandbox.rev_mgmt_deal_attributes_stg2;
+
+--COLLECT STATS
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (deal_id);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (vertical);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (pds_cat_id);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (pds_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (grt_l1_cat_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (grt_l2_cat_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (grt_l3_cat_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (grt_l4_cat_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (grt_l5_cat_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (goods_cat1);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (dmm_subcat);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (mrt_category);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (mrt_subcategory);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (inventory_service);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (account_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (merchant_key);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (account_id);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (deal_key);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (market);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (demand_channel);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (supply_channel);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (opportunity_id);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (partner_deal_source);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (getaways_booking_type);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (getaways_merchandising_region);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (national_vertical);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (metal_current);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (metal_at_close);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (market_rank);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (wow_deal);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (tpis_partner);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (promo_exclusion_flag);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (start_date);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (parent_account_id);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (parent_account_name);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (venue);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (sor);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (dp_eligible);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (hybrid_flag);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (is_s3);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (account_type);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (account_vertical);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (new_clients_res);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (tm_dt_res);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (add_fee_res);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (menu_ser_res);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (repurchase_res);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (repurchase_window);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (zero_dollar_deal);
+COLLECT STATISTICS USING SAMPLE 50 PERCENT COLUMN (permalink) ON sandbox.rev_mgmt_deal_attributes;
+COLLECT STATISTICS COLUMN 
+ (grt_l3_cat_name, pds_cat_id, demand_channel, grt_l4_cat_name, grt_l5_cat_name, pds_name,
+  metal_current, market, market_rank, wow_deal, inventory_service, promo_exclusion_flag) 
+ON sandbox.rev_mgmt_deal_attributes;
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (por_flag);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (vfm_cap);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (free_to_claim_flag);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (getaways_mkt_category);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (getaways_sales_region);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (getaways_sales_cluster);
+COLLECT STATS ON sandbox.rev_mgmt_deal_attributes COLUMN (getaways_sales_subregion);
