@@ -1,0 +1,898 @@
+/*  NA ETL  */
+--Deal Order
+DELETE FROM sandbox.getaways_garm_deal_order;
+INSERT INTO sandbox.getaways_garm_deal_order
+SELECT
+ deals.account_key,
+ deals.tour_country,
+ deals.opportunity_key,
+ deals.opportunity_id,
+ deals.feature_date,
+ deals.feature_end_date,
+ deals.booking_type,
+ deals.merch_slot,
+ deals.region,
+ deals.opportunity_name,
+ deals.permalink,
+ deals.deal_package,
+ deals.travel_quality,
+ deals.deal_key,
+ deals.deal_order,
+ extract (month from deals.feature_date) as feature_start_month,
+ extract (year from deals.feature_date) as feature_start_year, 
+ prior_deals.prior_opportunity_key,
+ prior_deals.prior_feature_date,
+ prior_deals.prior_booking_type,
+ extract (month from prior_deals.prior_feature_date) as prior_feature_start_month,
+ extract (year from prior_deals.prior_feature_date) as prior_feature_start_year 
+FROM
+ (
+  SELECT
+   opp.account_key,
+   CASE when ma.getaways_merchandising_region = 'Tour Operator' then opp.property_country else 'N/A' END        as tour_country,
+   opp.opportunity_key,
+   opp.opportunity_id,
+   opp.feature_date,
+   opp.feature_end_date,
+   COALESCE(opp.booking_voucher,'Voucher') as booking_type,
+   ma.getaways_merchandising_region  as merch_slot, 
+   ma.getaways_sales_region_ql       as region,
+   opp.opportunity_name, 
+   opp.permalink, 
+   COALESCE(opp.deal_package,3)      as deal_package,
+   opp.travel_quality,
+   COALESCE(deal.deal_key,-1)        as deal_key, 
+   ROW_NUMBER()OVER(PARTITION BY opp.account_key,tour_country ORDER BY opp.feature_date,opp.opportunity_key)    as deal_order
+  FROM user_groupondw.dim_opportunity opp
+   LEFT JOIN user_groupondw.dim_deal deal       on opp.opportunity_key = deal.opportunity_key
+   JOIN user_groupondw.dim_merchant_account ma  on opp.account_key = ma.account_key
+  WHERE
+   substring(opp.travel_quality from 1 for 1) in ('1','2','3') 
+    and COALESCE(opp.deal_package,3) <> 5 
+    and (opp.booking_voucher in ('Booking','Voucher') or opp.booking_voucher is null) 
+    and opp.stage_name not in ('Closed Lost','Closed Expired')
+    and opp.feature_date is not null
+  ) deals
+ LEFT JOIN 
+  (
+   SELECT 
+    opp.account_key, 
+    opp.opportunity_key                                                                                                  as prior_opportunity_key,
+    opp.feature_date                                                                                                     as prior_feature_date,
+    CASE when getaways_merchandising_region = 'Tour Operator' then opp.property_country else 'N/A' END                   as prior_tour_country,
+    COALESCE(opp.booking_voucher,'Voucher')                                                                              as prior_booking_type,
+    ROW_NUMBER() OVER (PARTITION BY opp.account_key,prior_tour_country ORDER BY opp.feature_date,opp.opportunity_key)+1  as prior_deal_order
+   FROM user_groupondw.dim_opportunity opp
+    JOIN user_groupondw.dim_merchant_account ma on ma.account_key = opp.account_key
+   WHERE 
+    substring(opp.travel_quality from 1 for 1) in ('1','2','3') 
+    and COALESCE(opp.deal_package,3) <> 5 
+    and (opp.booking_voucher in ('Booking','Voucher') or opp.booking_voucher is null) 
+    and opp.stage_name not in ('Closed Lost','Closed Expired')
+    and opp.feature_date is not null
+  ) prior_deals on deals.account_key = prior_deals.account_key and deals.tour_country = prior_deals.prior_tour_country and deals.deal_order = prior_deals.prior_deal_order
+;
+COLLECT STATS on sandbox.getaways_garm_deal_order;
+
+
+--Segment Map
+DELETE FROM sandbox.getaways_garm_segment_map;
+INSERT INTO sandbox.getaways_garm_segment_map
+SELECT 
+  CASE when COALESCE(dva.permalink,dvu.permalink,'#missing#') = '#missing#' then 'NATIONAL' else COALESCE(dva.permalink,dvu.permalink) END as user_division,
+  gdv.age_flag,
+  gdv.gender_flag,
+  CASE
+    when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 18 and 35 then '18-35'
+    when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 36 and 50 then '36-50'
+    when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 51 and 95 then '51+'
+    when gdv.age_flag = 1 then 'UNKNOWN'
+    when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 18 and 25 then '18-25'
+    when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 26 and 35 then '26-35'
+    when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 36 and 45 then '36-45'
+    when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 46 and 55 then '46-55'
+    when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 56 and 95 then '56+'
+    when gdv.age_flag = 2 then 'UNKNOWN'
+    else 'N/A'
+  END                                                                                 as user_age_group,
+  CASE when gdv.gender_flag = 1 then COALESCE(u.gender,'UNKNOWN') else 'N/A' END      as user_gender,
+  user_division || '_' || user_age_group || '_' || user_gender                        as segment,
+  CASE
+    when extract(year from current_date) - u.birth_year between 18 and 25 then '18-25'  
+    when extract(year from current_date) - u.birth_year between 26 and 30 then '26-30'  
+    when extract(year from current_date) - u.birth_year between 31 and 35 then '31-35'  
+    when extract(year from current_date) - u.birth_year between 36 and 40 then '36-40'  
+    when extract(year from current_date) - u.birth_year between 41 and 45 then '41-45'  
+    when extract(year from current_date) - u.birth_year between 46 and 50 then '46-50'  
+    when extract(year from current_date) - u.birth_year between 51 and 55 then '51-55'  
+    when extract(year from current_date) - u.birth_year between 56 and 95 then '56+'    
+    else 'UNKNOWN'
+   END                                                                                 as ga_deal_age_group,
+   COALESCE(u.gender,'UNKNOWN')                                                        as ga_deal_gender,   
+   user_division || '_' || ga_deal_age_group || '_' || ga_deal_gender                  as ga_deal_bucket
+FROM user_groupondw.dim_user u 
+  LEFT JOIN user_groupondw.user_entity_Attribute_02 a on u.user_key = a.user_key
+  LEFT JOIN user_groupondw.dim_division dva on dva.default_locale = 'en' and dva.is_active = 1 and dva.division_id = COALESCE(a.first_active_div_id,a.first_del_div_id)
+  LEFT JOIN user_groupondw.dim_division dvu on dvu.default_locale = 'en' and dvu.is_active = 1 and dvu.division_key = u.first_division_key 
+  LEFT JOIN (SELECT division_key, division_permalink, age_flag, gender_flag from sandbox.getaways_garm_user_divisions) gdv 
+   on gdv.division_permalink = CASE when COALESCE(dva.permalink,dvu.permalink,'#missing#') = '#missing#' then 'NATIONAL' else COALESCE(dva.permalink,dvu.permalink) END
+WHERE segment is not null
+GROUP BY 1,2,3,4,5,6,7,8,9
+;
+COLLECT STATS ON sandbox.getaways_garm_segment_map;
+
+
+--Segments
+DELETE FROM sandbox.getaways_garm_segments;
+INSERT INTO sandbox.getaways_garm_segments
+SELECT DISTINCT user_division, user_age_group, user_gender, segment
+FROM sandbox.getaways_garm_segment_map
+;
+COLLECT STATS ON sandbox.getaways_garm_segments;
+
+
+--Deal Perf
+DELETE FROM sandbox.getaways_garm_deal_perf;
+INSERT INTO sandbox.getaways_garm_deal_perf
+SELECT
+ matrix.account_key,
+ matrix.tour_country,
+ matrix.deal_order,
+ matrix.opportunity_key,
+ matrix.opportunity_id,
+ matrix.deal_key,
+ matrix.opportunity_name,
+ matrix.permalink,
+ matrix.deal_package,
+ matrix.merch_slot,
+ matrix.region,
+ matrix.feature_date,
+ matrix.feature_start_month,
+ matrix.feature_start_year, 
+ matrix.feature_end_date,
+ matrix.user_division,
+ matrix.user_age_group,
+ matrix.user_gender,
+ matrix.segment,
+ deal_gross_bookings,
+ deal_gross_revenue,
+ deal_nob,
+ deal_nor, 
+ CASE when booking_type = 'Voucher' then CASE when deal_nob * 1.1 > deal_gross_bookings then deal_gross_bookings else deal_nob * 1.1 END else deal_nob END as deal_gb,
+ CASE when booking_type = 'Voucher' then CASE when deal_nor * 1.1 > deal_gross_revenue then deal_gross_revenue else deal_nor * 1.1 END else deal_nor END as deal_gr,
+ matrix.prior_opportunity_key,
+ matrix.prior_feature_date,
+ matrix.prior_feature_start_month,
+ matrix.prior_feature_start_year,
+ CASE when booking_type = 'Voucher' then CASE when prior_deal_nob * 1.1 > prior_deal_gross_bookings then prior_deal_gross_bookings else prior_deal_nob * 1.1 END else prior_deal_nob END as prior_deal_gb,
+ CASE when booking_type = 'Voucher' then CASE when prior_deal_nor * 1.1 > prior_deal_gross_revenue then prior_deal_gross_revenue else prior_deal_nor * 1.1 END else prior_deal_nor END as prior_deal_gr
+FROM
+ (--This query creates a Matrix of Getaways deals by Divisions / Age Groups / Gender and brings in Deal and Prior Deal attributes
+  SELECT ord.*, s.user_division, s.user_age_group, s.user_gender, s.segment
+  FROM sandbox.getaways_garm_deal_order ord
+   FULL JOIN sandbox.getaways_garm_segments s on 1=1 
+  ) matrix
+  LEFT JOIN
+   (--Brings in Deal GB/GR and NOB/NOR data by Segment
+    SELECT
+      ord.opportunity_key                                                                                            as opportunity_key,
+      gdv.division_permalink                                                                                         as user_division,
+      CASE
+        when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 18 and 35 then '18-35'
+        when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 36 and 50 then '36-50'
+        when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 51 and 95 then '51+'
+        when gdv.age_flag = 1 then 'UNKNOWN'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 18 and 25 then '18-25'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 26 and 35 then '26-35'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 36 and 45 then '36-45'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 46 and 55 then '46-55'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 56 and 95 then '56+'
+        when gdv.age_flag = 2 then 'UNKNOWN'
+        else 'N/A'
+      END                                                                                                            as user_age_group,     
+      CASE when gdv.gender_flag = 1 then COALESCE(u.gender,'UNKNOWN') else 'N/A' END                                 as user_gender,
+      sum(om.gross_bookings)                                                                                         as deal_gross_bookings,
+      sum(om.gross_revenue) + sum(credit_card_fee)                                                                   as deal_gross_revenue,
+      sum(om.net_operational_bookings)                                                                               as deal_nob,
+      sum(om.net_operational_revenue)                                                                                as deal_nor      
+    FROM user_groupondw.fact_order_master om
+       JOIN user_groupondw.dim_deal d on d.deal_key = om.deal_key
+       JOIN sandbox.getaways_garm_deal_order ord on ord.opportunity_key = d.opportunity_key
+       JOIN user_groupondw.dim_user u on u.user_key = om.user_key
+       LEFT JOIN user_groupondw.user_entity_Attribute_02 a on u.user_key = a.user_key
+       LEFT JOIN user_groupondw.dim_division dva on dva.division_id = COALESCE(a.first_active_div_id,a.first_del_div_id)
+       LEFT JOIN user_groupondw.dim_division dvu on dvu.division_key = u.first_division_key 
+       LEFT JOIN sandbox.getaways_garm_user_divisions gdv on gdv.division_key = COALESCE (dva.division_key,dvu.division_key)
+    WHERE gdv.division_permalink is not null
+    GROUP BY 1,2,3,4
+   ) deal_perf on deal_perf.opportunity_key = matrix.opportunity_key and deal_perf.user_division = matrix.user_division 
+      and deal_perf.user_age_group = matrix.user_age_group and deal_perf.user_gender = matrix.user_gender
+  LEFT JOIN
+   (--Brings in Prior Deal GB/GR and NOB/NOR data by Segment
+    SELECT
+      ord.opportunity_key                                                                                                 as prior_opportunity_key,
+      gdv.division_permalink                                                                                              as user_division,
+      CASE
+        when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 18 and 35 then '18-35'
+        when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 36 and 50 then '36-50'
+        when gdv.age_flag = 1 and extract(year from current_date) - u.birth_year between 51 and 95 then '51+'
+        when gdv.age_flag = 1 then 'UNKNOWN'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 18 and 25 then '18-25'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 26 and 35 then '26-35'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 36 and 45 then '36-45'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 46 and 55 then '46-55'
+        when gdv.age_flag = 2 and extract(year from current_date) - u.birth_year between 56 and 95 then '56+'
+        when gdv.age_flag = 2 then 'UNKNOWN'
+        else 'N/A'
+      END                                                                                                                 as user_age_group,  
+      CASE when gdv.gender_flag = 1 then COALESCE(u.gender,'UNKNOWN') else 'N/A' END                                      as user_gender,
+      sum(om.gross_bookings)                                                                                              as prior_deal_gross_bookings,
+      sum(om.gross_revenue) + sum(credit_card_fee)                                                                        as prior_deal_gross_revenue,
+      sum(om.net_operational_bookings)                                                                                    as prior_deal_nob,
+      sum(om.net_operational_revenue)                                                                                     as prior_deal_nor       
+     FROM user_groupondw.fact_order_master om
+       JOIN user_groupondw.dim_deal d on d.deal_key = om.deal_key
+       JOIN sandbox.getaways_garm_deal_order ord on ord.opportunity_key = d.opportunity_key
+       JOIN user_groupondw.dim_user u on u.user_key = om.user_key
+       LEFT JOIN user_groupondw.user_entity_Attribute_02 a on u.user_key = a.user_key
+       LEFT JOIN user_groupondw.dim_division dva on dva.division_id = COALESCE(a.first_active_div_id,a.first_del_div_id)
+       LEFT JOIN user_groupondw.dim_division dvu on dvu.division_key = u.first_division_key 
+       LEFT JOIN sandbox.getaways_garm_user_divisions gdv on gdv.division_key = COALESCE (dva.division_key,dvu.division_key)
+     WHERE gdv.division_permalink is not null
+     GROUP BY 1,2,3,4
+   ) prior_deal_perf on 
+      prior_deal_perf.prior_opportunity_key = matrix.prior_opportunity_key and 
+      prior_deal_perf.user_division = matrix.user_division and
+      prior_deal_perf.user_age_group = matrix.user_age_group and 
+      prior_deal_perf.user_gender = matrix.user_gender
+;
+COLLECT STATS on sandbox.getaways_garm_deal_perf;
+
+
+--Inputs
+DELETE FROM sandbox.getaways_garm_final_input;
+INSERT INTO sandbox.getaways_garm_final_input
+SELECT
+ deals.user_division,
+ deals.user_age_group,
+ deals.user_gender,
+ deals.segment,
+ CASE when deals.user_gender = 'UNKNOWN' and deals.user_age_group not in ('UNKNOWN','N/A') then 1 END  as ug_flag,
+ deals.opportunity_key,
+ deals.opportunity_id,
+ deals.deal_key,
+ deals.account_key,
+ deals.deal_order,
+ deals.feature_date,
+ deals.feature_end_date,
+ deals.feature_end_date - deals.feature_date   as feature_length_in_days,
+ deals.permalink,
+ deals.merch_slot,
+ deals.region,
+ deals.tour_country,
+ CASE 
+   when deals.merch_slot in
+    ('Aruba','Bahamas','Belize - Beach','Belize - Jungle','Cabo','Cancun','Costa Rica - Beach','Costa Rica - Jungle',
+     'Cozumel','DR - Puerto Plata AI','DR - Puerto Plata EP','DR - Punta Cana AI','DR - Punta Cana EP',
+     'Honduras / Nicaragua','Jamaica - AI','Jamaica - EP','Other - Caribbean','Other - Central America',
+     'Other - Mexico','Panama','Puerto Rico','Puerto Vallarta','Riviera Maya','St Lucia / St Martin','St Lucia','St Martin',
+     'Antigua','Barbados','Bermuda','Cayman Islands','Turks and Caicos','Virgin Islands') then 'CMLA'
+   when deals.merch_slot like '%Destination%' or deals.merch_slot in
+    ('New York City - Manhattan','New York City - Manhattan Boutique','New York City - Times Square','Niagara Falls - Boutique') then 'Destination'
+  when deals.merch_slot in ('Other','Other - South America') then 'International'
+  when deals.merch_slot = 'Tour Operator' then 'Tour'
+  else 'Local'
+ END  as garm_type, 
+ CASE 
+  when deals.merch_slot = 'Tour Operator' and upper(deals.tour_country) in 
+   ('ARUBA','AW','AB','BAHAMAS','BS','BRITISH VIRGIN ISLANDS','CARIBBEAN','COSTA RICA','CR','DOMINICAN REPUBLIC','DR','GRAND CAYMAN',
+    'GUATEMALA','GT','JAMAICA','JM','MEXICO','MX','MX-W','MX-E','USVI','VI','PANAMA','PA','PUERTO RICO','AI','LC') then 'CMLA'
+  else garm_type 
+ END  as garm_type_recat,
+ dist.deal_latitude,
+ dist.deal_longitude,
+ dist.division_latitude,
+ dist.division_longitude,
+ dist.distance_in_miles,
+ dist.distance_bucket,
+ df.garm_distance_factor,
+ lp.lead_price                                                                                                                 as lead_price,
+ CASE when lp.lead_price > 500 then '500+' else '0-500' END                                                                    as lead_price_group, 
+ zeroifnull(deals.deal_gb)                                                                                                     as gb,
+ zeroifnull(deals.deal_gr)                                                                                                     as gr,
+ CASE when deals.deal_order = 1 then null else zeroifnull(deals.prior_deal_gb) END                                             as gb_priordeal,
+ CASE when deals.deal_order = 1 then null else zeroifnull(deals.prior_deal_gr) END                                             as gr_priordeal,
+ CASE when ug_flag = 1 then smgu.slot_mth_avg_gb else sm.slot_mth_avg_gb END                                                   as gb_slotmth_avg,
+ CASE when ug_flag = 1 then smgu.slot_mth_avg_gr else sm.slot_mth_avg_gr END                                                   as gr_slotmth_avg,
+ CASE when ug_flag = 1 then rmgu.rgn_mth_avg_gb else rm.rgn_mth_avg_gb END                                                     as gb_rgnmth_avg,
+ CASE when ug_flag = 1 then rmgu.rgn_mth_avg_gr else rm.rgn_mth_avg_gr END                                                     as gr_rgnmth_avg,
+ CASE when ug_flag = 1 then psmgu.slot_mth_avg_gb else psm.slot_mth_avg_gb END                                                 as gb_slotmth_avg_prior,
+ CASE when ug_flag = 1 then psmgu.slot_mth_avg_gr else psm.slot_mth_avg_gr END                                                 as gr_slotmth_avg_prior,
+ CASE when ug_flag = 1 then prmgu.rgn_mth_avg_gb else prm.rgn_mth_avg_gb END                                                   as gb_rgnmth_avg_prior,
+ CASE when ug_flag = 1 then prmgu.rgn_mth_avg_gr else prm.rgn_mth_avg_gr END                                                   as gr_rgnmth_avg_prior,
+ CASE when COALESCE(gb_slotmth_avg_prior,0) = 0 then 0 else gb_slotmth_avg/gb_slotmth_avg_prior END                            as gb_slotmth_factor,
+ CASE when COALESCE(gr_slotmth_avg_prior,0) = 0 then 0 else gr_slotmth_avg/gr_slotmth_avg_prior END                            as gr_slotmth_factor,
+ CASE when COALESCE(gb_rgnmth_avg_prior,0) = 0 then 0 else gb_rgnmth_avg/gb_rgnmth_avg_prior END                               as gb_rgnmth_factor,
+ CASE when COALESCE(gr_rgnmth_avg_prior,0) = 0 then 0 else gr_rgnmth_avg/gr_rgnmth_avg_prior END                               as gr_rgnmth_factor,
+ CASE when ug_flag = 1 then sgu.slot_avg_gb_fr else s.slot_avg_gb_fr END                                                       as gb_slot_avg_firstrun,
+ CASE when ug_flag = 1 then sgu.slot_avg_gr_fr else s.slot_avg_gr_fr END                                                       as gr_slot_avg_firstrun,
+ CASE when ug_flag = 1 then smgu.slot_mth_avg_gb_fr else sm.slot_mth_avg_gb_fr END                                             as gb_slotmth_avg_firstrun,
+ CASE when ug_flag = 1 then smgu.slot_mth_avg_gr_fr else sm.slot_mth_avg_gr_fr END                                             as gr_slotmth_avg_firstrun,
+ CASE when ug_flag = 1 then rmgu.rgn_mth_avg_gb_fr else rm.rgn_mth_avg_gb_fr END                                               as gb_rgnmth_avg_firstrun,
+ CASE when ug_flag = 1 then rmgu.rgn_mth_avg_gr_fr else rm.rgn_mth_avg_gr_fr END                                               as gr_rgnmth_avg_firstrun,
+ CASE when ug_flag = 1 then ly30gu.ly_30_avg_gb else ly30.ly_30_avg_gb END                                                     as gb_ly30_avg,
+ CASE when ug_flag = 1 then ly30gu.ly_30_avg_gr else ly30.ly_30_avg_gr END                                                     as gr_ly30_avg,
+ CASE when ug_flag = 1 then ly60gu.ly_60_avg_gb else ly60.ly_60_avg_gb END                                                     as gb_ly60_avg,
+ CASE when ug_flag = 1 then ly60gu.ly_60_avg_gr else ly60.ly_60_avg_gr END                                                     as gr_ly60_avg,
+ CASE when ug_flag = 1 then ly30frgu.ly_30_slot_fr_avg_gb else ly30fr.ly_30_slot_fr_avg_gb END                                 as gb_ly30_slot_avg_firstrun,
+ CASE when ug_flag = 1 then ly30frgu.ly_30_slot_fr_avg_gr else ly30fr.ly_30_slot_fr_avg_gr END                                 as gr_ly30_slot_avg_firstrun,
+ CASE when ug_flag = 1 then ly60frgu.ly_60_slot_fr_avg_gb else ly60fr.ly_60_slot_fr_avg_gb END                                 as gb_ly60_slot_avg_firstrun,
+ CASE when ug_flag = 1 then ly60frgu.ly_60_slot_fr_avg_gr else ly60fr.ly_60_slot_fr_avg_gr END                                 as gr_ly60_slot_avg_firstrun, 
+ CASE
+  when gb_slotmth_factor >= 2 and gb_rgnmth_factor >= 2 then 2 * gb_priordeal
+  when gb_slotmth_factor < 2 then gb_slotmth_factor * gb_priordeal
+  else gb_rgnmth_factor * gb_priordeal
+  END                                                                                                                          as gb_seasonality,
+ CASE 
+  when gr_slotmth_factor >= 2 and gr_rgnmth_factor >= 2 then 2  * gr_priordeal
+  when gr_slotmth_factor < 2 then gr_slotmth_factor * gr_priordeal
+  else gr_rgnmth_factor * gr_priordeal
+  END                                                                                                                          as gr_seasonality,
+ CASE
+  when deals.deal_order = 1 then COALESCE(gb_ly30_slot_avg_firstrun,gb_slotmth_avg_firstrun,gb_ly60_slot_avg_firstrun,gb_slot_avg_firstrun,gb_rgnmth_avg_firstrun,0)
+  else 
+  COALESCE (gb_ly30_avg, 
+   ((zeroifnull(gb_priordeal) + zeroifnull(gb_seasonality) + COALESCE(gb_ly60_avg,0)) 
+    /(2 + CASE when gb_ly60_avg is null then 0 else 1 END)))
+ END                                                                                                                           as gb_prediction, 
+ CASE
+  when deals.deal_order = 1 then COALESCE(gr_ly30_slot_avg_firstrun,gr_slotmth_avg_firstrun,gr_ly60_slot_avg_firstrun,gr_slot_avg_firstrun,gr_rgnmth_avg_firstrun,0)
+  else 
+  COALESCE (gr_ly30_avg, 
+   ((zeroifnull(gr_priordeal) + zeroifnull(gr_seasonality) + COALESCE(gr_ly60_avg,0)) 
+    /(2 + CASE when gr_ly60_avg is null then 0 else 1 END)))
+ END                                                                                                                           as gr_prediction,
+ zeroifnull(deals.deal_package)                                                                                                as planner_rank, 
+ zeroifnull(gdv.gb_weight)                                                                                                     as gb_weight,
+ zeroifnull(gdv.gr_weight)                                                                                                     as gr_weight,
+ zeroifnull(gdv.distance_weight)                                                                                               as distance_weight,
+ zeroifnull(gdv.deal_qualitative_weight)                                                                                       as deal_qualitative_weight,
+ 0                                                                                                                             as total_deal_pageviews_1k,
+ --dpv.total_deal_pageviews/1000.00                                                                                              as total_deal_pageviews_1k,
+ COALESCE(gwf.gateway, gwd.distance_gateway)                                                                                   as top_gateway,
+ COALESCE(gwf.ratio_gb_per_deal, gwd.ratio_gb_per_deal_d)                                                                      as ratio_gb_per_deal,
+ COALESCE(gwf.ratio_gr_per_deal, gwd.ratio_gr_per_deal_d)                                                                      as ratio_gr_per_deal,
+ COALESCE(gb_prediction * gwf.ratio_gb_per_deal, gb_prediction * gwd.ratio_gb_per_deal_d, gb_prediction)                       as gb_prediction_gateway,
+ COALESCE(gr_prediction * gwf.ratio_gr_per_deal, gb_prediction * gwd.ratio_gb_per_deal_d, gr_prediction)                       as gr_prediction_gateway,
+ current_timestamp                                                                                                             as created_datetime 
+FROM    
+ sandbox.getaways_garm_deal_perf deals
+  JOIN sandbox.getaways_garm_user_divisions gdv on gdv.division_permalink = deals.user_division
+  LEFT JOIN sandbox.getaways_garm_distance dist on dist.opportunity_key = deals.opportunity_key and dist.user_division = deals.user_division
+  LEFT JOIN sandbox.getaways_garm_distance_factor df on df.garm_type_recategorized = garm_type_recat and df.distance_bucket = dist.distance_bucket
+  LEFT JOIN (select opportunity_key, min(unit_sell_price) as lead_price from user_groupondw.dim_multi_deal group by 1) lp on lp.opportunity_key = deals.opportunity_key
+  --LEFT JOIN (select deal_key, zeroifnull(sum(nbr_deal_page_views_web)) + zeroifnull(sum(nbr_deal_page_views_mobile)) as total_deal_pageviews from sandbox.getaways_webanalytics_data group by 1) dpv on dpv.deal_key = deals.deal_key  
+ --Gender
+  LEFT JOIN sandbox.getaways_garm_bkg_slot         s        on s.merch_slot = deals.merch_slot and s.tour_country = deals.tour_country and s.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_slot_mth     sm       on sm.merch_slot = deals.merch_slot and sm.tour_country = deals.tour_country and sm.feature_start_month = deals.feature_start_month and sm.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_slot_mth     psm      on psm.merch_slot = deals.merch_slot and psm.tour_country = deals.tour_country and psm.feature_start_month = deals.prior_feature_start_month and psm.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_rgn_mth      rm       on rm.region = deals.region and rm.tour_country = deals.tour_country and rm.feature_start_month = deals.feature_start_month and rm.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_rgn_mth      prm      on prm.region = deals.region and prm.tour_country = deals.tour_country and prm.feature_start_month = deals.prior_feature_start_month and prm.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_ly30         ly30     on ly30.opportunity_key = deals.opportunity_key and ly30.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_ly60         ly60     on ly60.opportunity_key = deals.opportunity_key and ly60.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_ly30_slot    ly30fr   on ly30fr.opportunity_key = deals.opportunity_key and ly30fr.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_bkg_ly60_slot    ly60fr   on ly60fr.opportunity_key = deals.opportunity_key and ly60fr.segment = deals.segment
+  --Genderless
+  LEFT JOIN sandbox.getaways_garm_bkg_slot_gu      sgu      on sgu.merch_slot = deals.merch_slot and sgu.tour_country = deals.tour_country and sgu.user_division = deals.user_division and sgu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_slot_mth_gu  smgu     on smgu.merch_slot = deals.merch_slot and smgu.tour_country = deals.tour_country and smgu.feature_start_month = deals.feature_start_month and smgu.user_division = deals.user_division and smgu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_slot_mth_gu  psmgu    on psmgu.merch_slot = deals.merch_slot and psmgu.tour_country = deals.tour_country and psmgu.feature_start_month = deals.prior_feature_start_month and psmgu.user_division = deals.user_division and psmgu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_rgn_mth_gu   rmgu     on rmgu.region = deals.region and rmgu.tour_country = deals.tour_country and rmgu.feature_start_month = deals.feature_start_month and rmgu.user_division = deals.user_division and rmgu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_rgn_mth_gu   prmgu    on prmgu.region = deals.region and prmgu.tour_country = deals.tour_country and prmgu.feature_start_month = deals.prior_feature_start_month and prmgu.user_division = deals.user_division and prmgu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_ly30_gu      ly30gu   on ly30gu.opportunity_key = deals.opportunity_key and ly30gu.user_division = deals.user_division and ly30gu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_ly60_gu      ly60gu   on ly60gu.opportunity_key = deals.opportunity_key and ly60gu.user_division = deals.user_division and ly60gu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_ly30_slot_gu ly30frgu on ly30frgu.opportunity_key = deals.opportunity_key and ly30frgu.user_division = deals.user_division and ly30frgu.user_age_group = deals.user_age_group
+  LEFT JOIN sandbox.getaways_garm_bkg_ly60_slot_gu ly60frgu on ly60frgu.opportunity_key = deals.opportunity_key and ly60frgu.user_division = deals.user_division and ly60frgu.user_age_group = deals.user_age_group
+ --Gateway Logic
+  LEFT JOIN sandbox.getaways_garm_gateway_f        gwf      on gwf.opportunity_id = deals.opportunity_id and gwf.segment = deals.segment
+  LEFT JOIN sandbox.getaways_garm_gateway_d        gwd      on gwd.opportunity_id = deals.opportunity_id and gwd.segment = deals.segment
+WHERE deals.feature_date >= current_date-61
+;
+COLLECT STATS on sandbox.getaways_garm_final_input;
+
+--Rank
+DELETE FROM sandbox.getaways_garm_deal_rank;
+INSERT INTO sandbox.getaways_garm_deal_rank
+SELECT garm.*, 
+ ROW_NUMBER()OVER(PARTITION BY email_send_date,segment ORDER BY total_score_boost desc) as deal_rank
+FROM
+ (
+  SELECT DISTINCT
+   es.day_rw                                                         as email_send_date,
+   current_date-1 - feature_date                                     as days_passed_at_actual,
+   email_send_date-1 - feature_date                                  as days_passed_at_send,
+   feature_length_in_days,
+   lead_price_group, 
+   'US'                                                              as country,
+   f.user_division,
+   user_age_group,
+   user_gender,
+   segment,
+   f.opportunity_key, 
+   f.opportunity_id,
+   permalink,
+   deal_order,
+   feature_date, 
+   feature_end_date, 
+   merch_slot, 
+   tour_country, 
+   garm_type, 
+   garm_type_recat,
+   total_deal_pageviews_1k,
+--GB FACTORS
+   gb_weight                                                                                                                                                 as gb_weight,
+   CASE when s.cum_gb_pct is null then 0.01 when s.cum_gb_pct = 0 then 1.00 when s.cum_gb_pct > 100 then 100.00 else s.cum_gb_pct END / 100.00               as gb_pct_at_send,
+   CASE when a.cum_gb_pct is null then 0.01 when a.cum_gb_pct = 0 then 1.00 when a.cum_gb_pct > 100 then 100.00 else a.cum_gb_pct END / 100.00               as gb_pct_at_actual,
+   f.gb                                                                                                                                                      as gb_actual,
+   CASE when gb_actual is null then 0 else (gb_actual / gb_pct_at_actual) - (gb_pct_at_send * (gb_actual / gb_pct_at_actual)) END                            as gb_actual_potential,
+--GB FACTORS with New GB_Prediction Formula
+   gb_prediction                                                                                                                                             as gb_prediction,
+   gb_prediction_gateway                                                                                                                                     as gb_prediction_gateway,
+   zeroifnull(gb_prediction_gateway * (1-gb_pct_at_send))                                                                                                    as gb_prediction_potential,
+   CASE when gb_pct_at_actual >= .35 then gb_actual_potential else gb_prediction_potential END                                                               as gb_potential,
+   CASE when gb_potential = 0 then 0 else gb_potential / (MAX(gb_potential) over (partition by email_send_date,segment) +.01) END                            as gb_potential_normalized,
+   gb_weight * gb_potential_normalized                                                                                                                       as gb_potential_score,
+--GR FACTORS
+   gr_weight                                                                                                                                                 as gr_weight,
+   CASE when s.cum_gr_cc_pct is null then 0.01 when s.cum_gr_cc_pct = 0 then 1.00 when s.cum_gr_cc_pct > 100 then 100.00 else s.cum_gr_cc_pct END / 100.00   as gr_pct_at_send,
+   CASE when a.cum_gr_cc_pct is null then 0.01 when a.cum_gr_cc_pct = 0 then 1.00 when a.cum_gr_cc_pct > 100 then 100.00 else a.cum_gr_cc_pct END / 100.00   as gr_pct_at_actual,
+   f.gr                                                                                                                                                      as gr_actual,
+   CASE when gr_actual is null then 0 else (gr_actual / gr_pct_at_actual) - (gr_pct_at_send * (gr_actual / gr_pct_at_actual)) END                            as gr_actual_potential,
+--GR FACTORS with New GR_Prediction Formula
+   gr_prediction                                                                                                                                             as gr_prediction,
+   gr_prediction_gateway                                                                                                                                     as gr_prediction_gateway,
+   zeroifnull(CAST(gr_prediction_gateway as FLOAT)*(1-gr_pct_at_send))                                                                                       as gr_prediction_potential,
+   CASE when gr_pct_at_actual >= .35 then gr_actual_potential else gr_prediction_potential END                                                               as gr_potential,
+   CASE when gr_potential = 0 then 0 else gr_potential / (MAX(gr_potential) over (partition by email_send_date,segment) +.01) END                            as gr_potential_normalized,
+   gr_weight * gr_potential_normalized                                                                                                                       as gr_potential_score,
+--DISTANCE FACTORS
+   distance_weight                                                                                                                                           as distance_weight,
+   distance_in_miles                                                                                                                                         as distance, 
+   distance_bucket                                                                                                                                           as distance_bucket,
+   garm_distance_factor                                                                                                                                      as distance_normalized,
+   distance_weight * garm_distance_factor                                                                                                                    as distance_score,
+--PLANNER Rank FACTORS
+   deal_qualitative_weight                                                                                                                                   as deal_qual_weight,
+   planner_rank                                                                                                                                              as deal_qual,
+   CASE 
+    when deal_qual = 1 then 1 
+    when deal_qual = 2 then .4
+    when deal_qual = 3 then .3
+    when deal_qual = 4 then .1
+    else 0
+   END                                                                                                                                                       as deal_qual_factored,
+   deal_qual_factored                                                                                                                                        as deal_qual_normalized,
+   deal_qual_weight * deal_qual_normalized                                                                                                                   as deal_qual_score,
+   zeroifnull(gb_potential_score) + zeroifnull(gr_potential_score) + zeroifnull(distance_score) + zeroifnull(deal_qual_score)                                as total_score,
+   CASE when COALESCE(b.deal_boost,bd.deal_boost) is not null then total_score * (1 + COALESCE(b.deal_boost,bd.deal_boost)/100.00) else total_score END      as total_score_boost,
+   deal_near_max_flag                                                                                                                                        as deal_near_max_flag, 
+   created_datetime                                                                                                                                          as created_datetime
+  FROM sandbox.getaways_garm_final_input f
+   JOIN (select day_rw from user_groupondw.dim_day where day_rw between current_date and current_date+6 and day_abbrev in ('TUE','WED','THU','FRI','SUN')) es on 1=1
+   LEFT JOIN sandbox.getaways_deal_age_total_pct a on a.feature_length = feature_length_in_days and a.passed_days = days_passed_at_actual and a.unit_lead_price_group = lead_price_group
+   LEFT JOIN sandbox.getaways_deal_age_total_pct s on s.feature_length = feature_length_in_days and s.passed_days = days_passed_at_send and s.unit_lead_price_group = lead_price_group
+   LEFT JOIN sandbox.getaways_garm_boost_deals b on b.opportunity_id = f.opportunity_id and b.boost_date = email_send_date and b.user_division is null
+   LEFT JOIN sandbox.getaways_garm_boost_deals bd on bd.opportunity_id = f.opportunity_id and bd.boost_date = email_send_date and bd.user_division = f.user_division   
+   LEFT JOIN (select distinct theme_date from sandbox.getaways_garm_theme_deals) t on t.theme_date = email_send_date
+   LEFT JOIN sandbox.getaways_garm_theme_deals td on td.theme_date = email_send_date and td.opportunity_id = f.opportunity_id
+   LEFT JOIN
+    (SELECT cap.opportunity_key, CASE when (sold.units_sold - refunded.units_refunded)/cap.deal_cap > .90 then 1 else 0 END as deal_near_max_flag
+     FROM
+      (SELECT d.opportunity_key, sum(dop.max_pledges) as deal_cap
+       FROM user_groupondw.dim_deal_option dop
+        JOIN user_groupondw.dim_deal d on d.deal_key = dop.deal_key
+        JOIN sandbox.getaways_garm_deal_order ord on ord.opportunity_key = d.opportunity_key
+       WHERE max_pledges > 0
+       GROUP BY 1
+      ) cap 
+     LEFT JOIN
+      (SELECT d.opportunity_key, sum(c.original_quantity) as units_sold
+       FROM dw.v_fact_orders c
+        JOIN user_groupondw.dim_deal_option dop on dop.deal_option_key = c.deal_option_key
+        JOIN user_groupondw.dim_deal d on d.deal_key = dop.deal_key
+        JOIN sandbox.getaways_garm_deal_order ord on ord.opportunity_key = d.opportunity_key
+       GROUP BY 1
+      ) sold on sold.opportunity_key = cap.opportunity_key
+     LEFT JOIN
+      (SELECT d.opportunity_key, abs(sum(c.refund_quantity)) as units_refunded
+       FROM dw.v_fact_collections c
+        JOIN user_groupondw.dim_deal_option dop on dop.deal_option_key = c.deal_option_key
+        JOIN user_groupondw.dim_deal d on d.deal_key = dop.deal_key
+        JOIN sandbox.getaways_garm_deal_order ord on ord.opportunity_key = d.opportunity_key
+       GROUP BY 1
+      ) refunded on refunded.opportunity_key = cap.opportunity_key
+    ) deal_max on deal_max.opportunity_key = f.opportunity_key
+  WHERE 
+   (email_send_date = feature_date or (email_send_date >= feature_date and email_send_date < feature_end_date)) and
+   (t.theme_date is null or td.opportunity_id is not null)
+) garm
+where garm.permalink is not null
+;
+COLLECT STATS on sandbox.getaways_garm_deal_rank;
+
+--Rule A
+DELETE FROM sandbox.getaways_garm_deal_rank_a;
+--THIS QUERY ENSURES THAT THE TOP RANKED DEAL HASN'T BEEN IN POS1 IN AN EMAIL IN THE LAST 14 DAYS. IF IT HAS IT'S MOVED DOWN TO RANK 4
+INSERT INTO sandbox.getaways_garm_deal_rank_a
+SELECT r.*, lp.last_date_in_pos1,
+ CASE 
+  when rank_shift = 0 then r.deal_rank
+  when rank_shift > 0 and r.deal_rank between rank_shift+1 and rank_shift+3 then deal_rank - rank_shift
+  when rank_shift > 0 and r.deal_rank between 1 and rank_shift then deal_rank + 3
+  else r.deal_rank
+ END as rank_a
+FROM sandbox.getaways_garm_deal_rank r
+ LEFT JOIN
+  (
+   SELECT segment, email_send_date,
+    CASE 
+     when rank1_flag + rank2_flag + rank3_flag + rank4_flag + rank5_flag = 5 then 5
+     when rank1_flag + rank2_flag + rank3_flag + rank4_flag = 4 then 4
+     when rank1_flag + rank2_flag + rank3_flag = 3 then 3
+     when rank1_flag + rank2_flag = 2 then 2
+     when rank1_flag = 1 then 1
+     else 0
+    END as rank_shift
+   FROM 
+    (SELECT segment,email_send_date,
+      MAX(CASE when deal_rank = 1 and last_date_in_pos1 < email_send_date then 1 else 0 END) as rank1_flag,
+      MAX(CASE when deal_rank = 2 and last_date_in_pos1 < email_send_date then 1 else 0 END) as rank2_flag,
+      MAX(CASE when deal_rank = 3 and last_date_in_pos1 < email_send_date then 1 else 0 END) as rank3_flag,
+      MAX(CASE when deal_rank = 4 and last_date_in_pos1 < email_send_date then 1 else 0 END) as rank4_flag,
+      MAX(CASE when deal_rank = 5 and last_date_in_pos1 < email_send_date then 1 else 0 END) as rank5_flag
+     FROM sandbox.getaways_garm_deal_rank f
+      LEFT JOIN
+       (
+        SELECT 
+         cu.permalink, mp.user_division as division_permalink, mp.user_gender as gender, mp.user_age_group as age_group,
+         max(cast(cu.send_date - 19000000 as date)) as last_date_in_pos1 
+        FROM sandbox.getaways_email_curation_new cu
+         JOIN sandbox.getaways_garm_deal_rank o on o.permalink = cu.permalink
+         JOIN sandbox.getaways_garm_segment_map mp on cu.division_permalink = mp.user_division and UPPER(cu.gender) = mp.ga_deal_gender and UPPER(cu.age_group) = mp.ga_deal_age_group
+        WHERE cu.version = 4.1 and cu.deal_order = 1 and cast(cu.send_date - 19000000 as date) >= o.feature_date
+        group by 1,2,3,4
+      ) p1 on p1.permalink = f.permalink and p1.division_permalink = f.user_division and UPPER(p1.age_group) = f.user_age_group and UPPER(p1.gender) = f.user_gender and f.email_send_date < p1.last_date_in_pos1+14
+     group by 1,2
+    ) p
+  ) s on s.segment = r.segment and s.email_send_date = r.email_send_date
+ LEFT JOIN
+  (SELECT permalink, division_permalink, gender, age_group, max(last_date_in_pos1) as last_date_in_pos1
+   FROM
+    (SELECT 
+      cu.permalink, cu.division_permalink, cu.gender, 
+      CASE when cu.age_group = '0-25' then '18-25' when cu.age_group = '0-35' then '18-35' when cu.age_group = '36-49' then '36-50' when cu.age_group = '50+' then '51+' else cu.age_group END as age_group, 
+      max(cast(cu.send_date - 19000000 as date)) as last_date_in_pos1 
+     FROM sandbox.getaways_email_curation_new cu
+      JOIN sandbox.getaways_garm_deal_rank o on o.permalink = cu.permalink
+     WHERE cu.version = 3.0 and cu.deal_order = 1 and cast(cu.send_date - 19000000 as date) >= o.feature_date
+     GROUP BY 1,2,3,4
+     UNION
+     SELECT 
+      cu.permalink, mp.user_division, mp.user_gender, mp.user_age_group,
+      max(cast(cu.send_date - 19000000 as date)) as last_date_in_pos1 
+     FROM sandbox.getaways_email_curation_new cu
+      JOIN sandbox.getaways_garm_deal_rank o on o.permalink = cu.permalink
+      JOIN sandbox.getaways_garm_segment_map mp on cu.division_permalink = mp.user_division and UPPER(cu.gender) = mp.ga_deal_gender and UPPER(cu.age_group) = mp.ga_deal_age_group
+     WHERE cu.version = 4.1 and cu.deal_order = 1 and cast(cu.send_date - 19000000 as date) >= o.feature_date
+     GROUP BY 1,2,3,4
+    ) c
+   GROUP BY 1,2,3,4
+  ) lp on lp.permalink = r.permalink and lp.division_permalink = r.user_division and UPPER(lp.age_group) = r.user_age_group and UPPER(lp.gender) = r.user_gender and r.email_send_date < lp.last_date_in_pos1+14 
+;
+
+--Rule B
+DELETE FROM sandbox.getaways_garm_deal_rank_b;
+--THIS QUERY ENSURES THAT THE TOP FIVE DEALS HAVE UNIQUE MERCH SLOTS/TOUR COUNTRIES
+INSERT INTO sandbox.getaways_garm_deal_rank_b
+SELECT
+ ra.*,
+ ROW_NUMBER() over (partition by ra.segment, ra.email_send_date ORDER BY CASE when ra.rank_a = b.best_slot_rank then b.new_rank else ra.rank_a + 100 END) as rank_b
+FROM sandbox.getaways_garm_deal_rank_a ra
+ LEFT JOIN
+  (SELECT a.*, ROW_NUMBER() over (partition by a.segment, a.email_send_date ORDER BY a.best_slot_rank) new_rank
+   FROM
+    (SELECT segment, email_send_date, merch_slot, tour_country, min(rank_a) best_slot_rank 
+     FROM sandbox.getaways_garm_deal_rank_a
+     group by 1,2,3,4 
+    ) a qualify new_rank <= 5
+  ) b on ra.segment = b.segment and ra.email_send_date = b.email_send_date and ra.rank_a = b.best_slot_rank
+;
+
+
+--Rule C1
+DELETE FROM sandbox.getaways_garm_deal_rank_c1;
+--THIS QUERY ENSURES THE TOP 9 RANKS HAVE NO MORE THAN THREE DEALS PER MERCH SLOT / TOUR COUNTRY
+INSERT INTO sandbox.getaways_garm_deal_rank_c1
+SELECT r.*, ROW_NUMBER() over (PARTITION BY r.segment, r.email_send_date ORDER BY COALESCE(ca.new_rank_c1,r.rank_b)) as rank_c1
+FROM sandbox.getaways_garm_deal_rank_b r
+ LEFT JOIN
+ (
+  SELECT b.segment, b.email_send_date, b.merch_slot, b.tour_country, b.rank_b, 7.1 as new_rank_c1
+  FROM sandbox.getaways_garm_deal_rank_b b
+   LEFT JOIN
+    (--This query looks at the top 7 ranked deals and determines if a merch_slot / tour_country already has three occurances
+     SELECT segment, email_send_date, merch_slot, tour_country, count(*) distinct_ms_tc_count
+     FROM sandbox.getaways_garm_deal_rank_b 
+     WHERE rank_b < 8
+     group by 1,2,3,4
+     having distinct_ms_tc_count = 3
+    ) a on a.segment = b.segment and a.email_send_date = b.email_send_date and a.merch_slot = b.merch_slot and a.tour_country = b.tour_country
+  WHERE rank_b >= 8 and rank_b <= 15 and a.distinct_ms_tc_count is null
+ QUALIFY ROW_NUMBER() over (PARTITION BY b.segment, b.email_send_date ORDER BY rank_b) = 1
+ ) ca on ca.segment = r.segment and ca.email_send_date = r.email_send_date and ca.rank_b = r.rank_b
+;
+
+--Rule C2
+DELETE FROM sandbox.getaways_garm_deal_rank_c2;
+--ENSURE THE TOP 9 RANKS HAVE NO MORE THAN THREE DEALS PER MERCH SLOT / TOUR COUNTRY
+INSERT INTO sandbox.getaways_garm_deal_rank_c2
+SELECT r.*, ROW_NUMBER() over (PARTITION BY r.segment, r.email_send_date ORDER BY COALESCE(ca.new_rank_c2,r.rank_c1)) as rank_c2
+FROM sandbox.getaways_garm_deal_rank_c1 r
+ LEFT JOIN
+ (
+  SELECT b.segment, b.email_send_date, b.merch_slot, b.tour_country, b.rank_c1, 8.1 as new_rank_c2
+  FROM sandbox.getaways_garm_deal_rank_c1 b
+   LEFT JOIN
+    (--This query looks at the top 8 ranked deals and determines if a merch_slot / tour_country already has three occurances
+     SELECT segment, email_send_date, merch_slot, tour_country, count(*) distinct_ms_tc_count
+     FROM sandbox.getaways_garm_deal_rank_c1 
+     WHERE rank_b < 9
+     group by 1,2,3,4
+     having distinct_ms_tc_count = 3
+    ) a on a.segment = b.segment and a.email_send_date = b.email_send_date and a.merch_slot = b.merch_slot and a.tour_country = b.tour_country
+  WHERE rank_b >= 9 and rank_b <= 15 and a.distinct_ms_tc_count is null
+ QUALIFY ROW_NUMBER() over (PARTITION BY b.segment, b.email_send_date ORDER BY rank_c1) = 1
+ ) ca on ca.segment = r.segment and ca.email_send_date = r.email_send_date and ca.rank_c1 = r.rank_c1
+;
+
+
+--Rule D Unfeat
+DELETE FROM sandbox.getaways_garm_deal_unfeat;
+--THIS QUERY ISOLATES THOSE DEALS WHO 1) HAVE NEVER HAD A TOP 9 POSITION IN A SEND AND 2) DON'T HAVE A TOP NINE RANK SOMEWHERE IN THEIR NEXT SEND
+INSERT INTO sandbox.getaways_garm_deal_unfeat
+SELECT rrr.*, r2.segment2, r3.segment3, r4.segment4, segment5 FROM
+ (SELECT rr.*, ROW_NUMBER() over (partition by segment,email_send_date ORDER BY top_rank asc) as dag_order FROM
+   (SELECT 
+     r.opportunity_key,
+     r.permalink,
+     r.email_send_date,
+     r.feature_date,
+     r.segment,
+     r.rank_c2  as top_rank,
+     p.top_pos
+    FROM sandbox.getaways_garm_deal_rank_c2 r 
+      LEFT JOIN 
+      (SELECT cu.permalink, min(cu.deal_order) top_pos 
+       FROM sandbox.getaways_email_curation_new cu
+         JOIN sandbox.getaways_garm_deal_order o on o.permalink = cu.permalink
+       WHERE cu.version = 3.0 and cast(cu.send_date - 19000000 as date) >= o.feature_date       
+       group by 1
+      ) p on p.permalink = r.permalink  
+    qualify ROW_NUMBER() over (partition by r.opportunity_key,r.email_send_date ORDER BY r.rank_c2 asc) = 1
+   ) rr WHERE top_rank > 9 and COALESCE(top_pos,10) > 9
+ ) rrr
+LEFT JOIN
+  (SELECT 
+    r.opportunity_key,
+    r.email_send_date,
+    r.segment               as segment2, 
+    r.rank_c2               as rank2
+   FROM sandbox.getaways_garm_deal_rank_c2 r 
+   qualify ROW_NUMBER() over (partition by r.opportunity_key,r.email_send_date ORDER BY r.rank_c2 asc) = 2
+  ) r2 on r2.opportunity_key = rrr.opportunity_key and r2.email_send_date = rrr.email_send_date
+LEFT JOIN
+  (SELECT 
+    r.opportunity_key,
+    r.email_send_date,
+    r.segment               as segment3, 
+    r.rank_c2               as rank3
+   FROM sandbox.getaways_garm_deal_rank_c2 r 
+      qualify ROW_NUMBER() over (partition by r.opportunity_key,r.email_send_date ORDER BY r.rank_c2 asc) = 3
+  ) r3 on r3.opportunity_key = rrr.opportunity_key and r3.email_send_date = rrr.email_send_date
+LEFT JOIN
+  (SELECT 
+    r.opportunity_key,
+    r.email_send_date,
+    r.segment               as segment4, 
+    r.rank_c2               as rank4
+   FROM sandbox.getaways_garm_deal_rank_c2 r 
+      qualify ROW_NUMBER() over (partition by r.opportunity_key,r.email_send_date ORDER BY r.rank_c2 asc) = 4
+  ) r4 on r4.opportunity_key = rrr.opportunity_key and r4.email_send_date = rrr.email_send_date
+LEFT JOIN
+  (SELECT 
+    r.opportunity_key,
+    r.email_send_date,
+    r.segment               as segment5, 
+    r.rank_c2               as rank5
+   FROM sandbox.getaways_garm_deal_rank_c2 r 
+      qualify ROW_NUMBER() over (partition by r.opportunity_key,r.email_send_date ORDER BY r.rank_c2 asc) = 5
+  ) r5 on r5.opportunity_key = rrr.opportunity_key and r5.email_send_date = rrr.email_send_date
+;
+
+
+--Rule D
+DELETE FROM sandbox.getaways_garm_deal_rank_d;
+--THIS QUERY ENSURES THAT ALL DEALS HAVE AT LEAST ONE TOP 9 RANK SOMEWHERE ON THEIR NEXT SEND
+INSERT INTO sandbox.getaways_garm_deal_rank_d
+SELECT 
+ r.*, 
+ ROW_NUMBER() over (PARTITION BY r.segment, r.email_send_date ORDER BY CASE when pos9.ninth_ranked_dag is not null then 8.5 else rank_c2 END) as rank_d
+FROM sandbox.getaways_garm_deal_rank_c2 r
+ LEFT JOIN
+  (SELECT distinct 
+    uf.email_send_date, uf.opportunity_key, uf.segment,
+    CASE 
+     when uf.dag_order = 1 then uf.segment
+     when uf.dag_order <> 1 then 
+      CASE 
+       when dag1.segment is null then uf.segment2
+       when dag2.segment is null then uf.segment3
+       else null
+     END 
+   END as ninth_ranked_dag
+   FROM sandbox.getaways_garm_deal_unfeat uf
+   LEFT JOIN 
+    (select distinct email_send_date, segment from sandbox.getaways_garm_deal_unfeat
+    ) dag1 on uf.dag_order <> 1 
+         and uf.email_send_date = dag1.email_send_date and uf.segment2 = dag1.segment
+   LEFT JOIN 
+    (select distinct email_send_date, segment from sandbox.getaways_garm_deal_unfeat union select distinct email_send_date, segment2 from sandbox.getaways_garm_deal_unfeat
+    ) dag2 on uf.dag_order <> 1 
+         and uf.email_send_date = dag2.email_send_date and uf.segment3 = dag2.segment
+  ) pos9 on pos9.opportunity_key = r.opportunity_key and pos9.email_send_date = r.email_send_date and pos9.ninth_ranked_dag = r.segment
+;
+
+
+--Rule E
+DELETE FROM sandbox.getaways_garm_deal_rank_e;
+--THIS QUERY ENSURES THAT ALL DEALS IN THE TOP 9 RANKS ARE SPACED OUT BY MERCH SLOT / TOUR COUNTRY
+INSERT INTO sandbox.getaways_garm_deal_rank_e
+SELECT r.*,
+   CASE
+   --Rank 5,6,7 have same MS/TC
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r7.merch_slot || r7.tour_country) and r.rank_d = 6 then 7
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r7.merch_slot || r7.tour_country) and r.rank_d = 7 then 9
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r7.merch_slot || r7.tour_country) and r.rank_d = 8 then 6
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r7.merch_slot || r7.tour_country) and r.rank_d = 9 then 8
+  --Rank 5,6,8 have same MS/TC
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 6 then 7   
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 7 then 6
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 8 then 9
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r5.merch_slot || r5.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 9 then 8
+  --Rank 6,7,8 have same MS/TC
+    when (r6.merch_slot || r6.tour_country) = (r7.merch_slot || r7.tour_country) and (r6.merch_slot || r6.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 5 then 6   
+    when (r6.merch_slot || r6.tour_country) = (r7.merch_slot || r7.tour_country) and (r6.merch_slot || r6.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 6 then 5   
+    when (r6.merch_slot || r6.tour_country) = (r7.merch_slot || r7.tour_country) and (r6.merch_slot || r6.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 7 then 7
+    when (r6.merch_slot || r6.tour_country) = (r7.merch_slot || r7.tour_country) and (r6.merch_slot || r6.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 8 then 9
+    when (r6.merch_slot || r6.tour_country) = (r7.merch_slot || r7.tour_country) and (r6.merch_slot || r6.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 9 then 8      
+  --Rank 7,8,9 have same MS/TC
+    when (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and (r7.merch_slot || r7.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 5 then 6
+    when (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and (r7.merch_slot || r7.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 6 then 8
+    when (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and (r7.merch_slot || r7.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 7 then 5
+    when (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and (r7.merch_slot || r7.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 8 then 7
+    when (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and (r7.merch_slot || r7.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 9 then 9 
+  --Rank 5,6 have same MS/TC and 7,8 have same MS/TC
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 6 then 7    
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 7 then 6    
+  --Rank 5,6 have same MS/TC and 8,9 have same MS/TC
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r8.merch_slot || r8.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 6 then 7    
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r8.merch_slot || r8.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 7 then 8    
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and (r8.merch_slot || r8.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 8 then 6    
+  --Rank 5,6 have same MS/TC
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and r.rank_d = 6 then 7   
+    when (r5.merch_slot || r5.tour_country) = (r6.merch_slot || r6.tour_country) and r.rank_d = 7 then 6
+  --Rank 6,7 have same MS/TC
+    when (r6.merch_slot || r6.tour_country) = (r7.merch_slot || r7.tour_country) and r.rank_d = 7 then 8   
+    when (r6.merch_slot || r6.tour_country) = (r7.merch_slot || r7.tour_country) and r.rank_d = 8 then 7    
+  --Rank 7,8 have same MS/TC
+    when (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 8 then 9   
+    when (r7.merch_slot || r7.tour_country) = (r8.merch_slot || r8.tour_country) and r.rank_d = 9 then 8    
+  --Rank 8,9 have same MS/TC
+    when (r8.merch_slot || r8.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 7 then 8   
+    when (r8.merch_slot || r8.tour_country) = (r9.merch_slot || r9.tour_country) and r.rank_d = 8 then 7    
+    else r.rank_d
+  END as rank_e
+FROM sandbox.getaways_garm_deal_rank_d r
+ LEFT JOIN sandbox.getaways_garm_deal_rank_d r5 on r.rank_d in (5,6,7,8,9) and r5.rank_d = 5 and r.email_send_date = r5.email_send_date and r.segment = r5.segment
+ LEFT JOIN sandbox.getaways_garm_deal_rank_d r6 on r.rank_d in (5,6,7,8,9) and r6.rank_d = 6 and r.email_send_date = r6.email_send_date and r.segment = r6.segment
+ LEFT JOIN sandbox.getaways_garm_deal_rank_d r7 on r.rank_d in (5,6,7,8,9) and r7.rank_d = 7 and r.email_send_date = r7.email_send_date and r.segment = r7.segment
+ LEFT JOIN sandbox.getaways_garm_deal_rank_d r8 on r.rank_d in (5,6,7,8,9) and r8.rank_d = 8 and r.email_send_date = r8.email_send_date and r.segment = r8.segment
+ LEFT JOIN sandbox.getaways_garm_deal_rank_d r9 on r.rank_d in (5,6,7,8,9) and r9.rank_d = 9 and r.email_send_date = r9.email_send_date and r.segment = r9.segment
+;
+
+-- Rank Final
+DELETE FROM sandbox.getaways_garm_deal_rank_final;
+INSERT INTO sandbox.getaways_garm_deal_rank_final
+SELECT r.*, ROW_NUMBER() over (PARTITION BY r.segment, r.email_send_date ORDER BY r.rank_e) as rank_final 
+FROM sandbox.getaways_garm_deal_rank_e r
+WHERE r.permalink is not null
+;
+
+--Rank Flip
+DELETE FROM sandbox.getaways_garm_deal_rank_flip;
+INSERT INTO sandbox.getaways_garm_deal_rank_flip
+SELECT 
+    email_send_date, 
+    segment                              as ga_deal_bucket_flex,
+    max(CASE when rank_final = 1  then permalink END) as deal_1,
+    max(CASE when rank_final = 2  then permalink END) as deal_2,
+    max(CASE when rank_final = 3  then permalink END) as deal_3,
+    max(CASE when rank_final = 4  then permalink END) as deal_4,
+    max(CASE when rank_final = 5  then permalink END) as deal_5,
+    max(CASE when rank_final = 6  then permalink END) as deal_6,
+    max(CASE when rank_final = 7  then permalink END) as deal_7,
+    max(CASE when rank_final = 8  then permalink END) as deal_8,
+    max(CASE when rank_final = 9  then permalink END) as deal_9,
+    max(CASE when rank_final = 10 then permalink END) as deal_10,  
+    max(CASE when rank_final = 11 then permalink END) as deal_11,
+    max(CASE when rank_final = 12 then permalink END) as deal_12,
+    max(CASE when rank_final = 13 then permalink END) as deal_13,
+    max(CASE when rank_final = 14 then permalink END) as deal_14,
+    max(CASE when rank_final = 15 then permalink END) as deal_15,
+    max(CASE when rank_final = 16 then permalink END) as deal_16,
+    max(CASE when rank_final = 17 then permalink END) as deal_17,
+    max(CASE when rank_final = 18 then permalink END) as deal_18,
+    max(CASE when rank_final = 19 then permalink END) as deal_19,
+    max(CASE when rank_final = 20 then permalink END) as deal_20,
+    max(CASE when rank_final = 21 then permalink END) as deal_21,
+    max(CASE when rank_final = 22 then permalink END) as deal_22,
+    max(CASE when rank_final = 23 then permalink END) as deal_23,
+    max(CASE when rank_final = 24 then permalink END) as deal_24,
+    max(CASE when rank_final = 25 then permalink END) as deal_25,
+    max(CASE when rank_final = 26 then permalink END) as deal_26,
+    max(CASE when rank_final = 27 then permalink END) as deal_27,
+    max(CASE when rank_final = 28 then permalink END) as deal_28,
+    max(CASE when rank_final = 29 then permalink END) as deal_29,
+    max(CASE when rank_final = 30 then permalink END) as deal_30,
+    max(CASE when rank_final = 31 then permalink END) as deal_31,
+    max(CASE when rank_final = 32 then permalink END) as deal_32,
+    max(CASE when rank_final = 33 then permalink END) as deal_33,
+    max(CASE when rank_final = 34 then permalink END) as deal_34,
+    max(CASE when rank_final = 35 then permalink END) as deal_35,
+    max(CASE when rank_final = 36 then permalink END) as deal_36,
+    max(CASE when rank_final = 37 then permalink END) as deal_37,
+    max(CASE when rank_final = 38 then permalink END) as deal_38,
+    max(CASE when rank_final = 39 then permalink END) as deal_39,
+    max(CASE when rank_final = 40 then permalink END) as deal_40,
+    max(CASE when rank_final = 41 then permalink END) as deal_41,
+    max(CASE when rank_final = 42 then permalink END) as deal_42,
+    max(CASE when rank_final = 43 then permalink END) as deal_43,
+    max(CASE when rank_final = 44 then permalink END) as deal_44,
+    max(CASE when rank_final = 45 then permalink END) as deal_45,
+    max(CASE when rank_final = 46 then permalink END) as deal_46,
+    max(CASE when rank_final = 47 then permalink END) as deal_47,
+    max(CASE when rank_final = 48 then permalink END) as deal_48,
+    max(CASE when rank_final = 49 then permalink END) as deal_49,
+    max(CASE when rank_final = 50 then permalink END) as deal_50,
+    created_datetime
+FROM sandbox.getaways_garm_deal_rank_final f
+WHERE rank_final <= 50
+GROUP BY 1,2,53
+;
+
+
+--Rank Flex
+DELETE FROM sandbox.getaways_garm_deal_rank_flex;
+INSERT INTO sandbox.getaways_garm_deal_rank_flex
+SELECT 
+    f.email_send_date,
+    f.ga_deal_bucket_flex,
+    mp.ga_deal_bucket,
+    deal_1, deal_2, deal_3, deal_4, deal_5, deal_6, deal_7, deal_8, deal_9, deal_10,
+    deal_11, deal_12, deal_13, deal_14, deal_15, deal_16 ,deal_17 ,deal_18 ,deal_19, deal_20,
+    deal_21, deal_22, deal_23, deal_24, deal_25, deal_26 ,deal_27 ,deal_28 ,deal_29, deal_30,
+    deal_31, deal_32, deal_33, deal_34, deal_35, deal_36 ,deal_37 ,deal_38 ,deal_39, deal_40,
+    deal_41, deal_42, deal_43, deal_44, deal_45, deal_46 ,deal_47 ,deal_48 ,deal_49, deal_50,
+    created_datetime
+FROM sandbox.getaways_garm_deal_rank_flip f
+ JOIN sandbox.getaways_garm_segment_map mp on f.ga_deal_bucket_flex = mp.segment
+;
