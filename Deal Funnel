@@ -1,0 +1,324 @@
+--DEAL FUNNEL CODE FOR 2017-06-05 ONWARD
+--PREPARE EMAIL IMPRESSIONS FOR LOAD
+DELETE FROM sandbox.rev_mgmt_email_imp_temp;
+INSERT INTO sandbox.rev_mgmt_email_imp_temp
+SELECT
+ coalesce(s.deal_id,o.deal_id,'-1')               as deal_id,
+ coalesce(s.report_date,o.report_date)            as report_date,
+ coalesce(s.country,o.country,'?')                as country_code,
+ coalesce(s.traffic_source,o.traffic_source,'?')  as traffic_source,
+ coalesce(s.platform,o.platform,'?')              as platform, 
+ coalesce(s.platform_key,o.platform_key)          as platform_key,
+ coalesce(s.brand,o.brand,'?')                    as brand,
+ coalesce(p1_sends,0)                             as email_p1_sends,
+ coalesce(total_sends,0)                          as email_total_sends,
+ coalesce(p1_sd_opens,0)                          as email_p1_sd_opens,
+ coalesce(total_sd_opens,0)                       as email_total_sd_opens
+FROM
+ (SELECT
+   deal_id                                 as deal_id,
+   report_date                             as report_date,
+   country_code                            as country,
+   coalesce(initcap(traffic_source),'?')   as traffic_source,
+   'email'                                 as platform,
+   platform_key                            as platform_key,
+   coalesce(user_brand_affiliation,'?')    as brand,
+   sum(p1_sends)                           as p1_sends,
+   sum(total_sends)                        as total_sends
+ FROM user_edwprod.gbl_email_impression_agg_sends
+ WHERE 
+  economic_area = 'NA'
+  and report_date between '2018-07-01' and '2018-07-30'
+  and platform_key in (1,2)
+ GROUP BY 1,2,3,4,5,6,7
+ ) s
+FULL OUTER JOIN 
+ (SELECT
+   deal_id                                 as deal_id,
+   report_date                             as report_date,
+   country_code                            as country,
+   coalesce(initcap(traffic_source),'?')   as traffic_source,
+   'email'                                 as platform,
+   platform_key                            as platform_key,
+   coalesce(user_brand_affiliation,'?')    as brand,
+   sum(p1_sd_opens)                        as p1_sd_opens,
+   sum(total_sd_opens)                     as total_sd_opens
+ FROM user_edwprod.gbl_email_impression_agg_opens
+ WHERE 
+  economic_area = 'NA'
+  and report_date between '2018-07-01' and '2018-07-30'
+  and platform_key in (1,2)
+ GROUP BY 1,2,3,4,5,6,7
+ ) o
+  on s.deal_id = o.deal_id
+  and s.report_date = o.report_date
+  and s.country = o.country
+  and s.traffic_source = o.traffic_source
+  and s.platform = o.platform
+  and s.platform_key = o.platform_key
+  and s.brand = o.brand;
+COLLECT STATS on sandbox.rev_mgmt_email_imp_temp column(deal_id);
+COLLECT STATS on sandbox.rev_mgmt_email_imp_temp column(report_date);
+COLLECT STATS on sandbox.rev_mgmt_email_imp_temp column(country_code);
+COLLECT STATS on sandbox.rev_mgmt_email_imp_temp column(traffic_source);
+COLLECT STATS on sandbox.rev_mgmt_email_imp_temp column(platform);
+COLLECT STATS on sandbox.rev_mgmt_email_imp_temp column(platform_key);
+COLLECT STATS on sandbox.rev_mgmt_email_imp_temp column(brand);
+COLLECT STATS COLUMN (deal_id,report_date,country_code,traffic_source,platform,platform_key,brand) on sandbox.rev_mgmt_email_imp_temp;
+COLLECT STATS COLUMN (deal_id,report_date) on sandbox.rev_mgmt_email_imp_temp;
+
+
+--PREPARE SITE IMPRESSIONS FOR LOAD
+DELETE FROM sandbox.rev_mgmt_site_imp_temp;
+INSERT INTO sandbox.rev_mgmt_site_imp_temp 
+SELECT
+ coalesce(deal_id,'-1')                 as deal_id,
+ report_date                            as report_date,
+ coalesce(country_code,'?')             as country_code,
+ coalesce(traffic_source,'?')           as traffic_source,
+ coalesce(lower(platform),'?')          as platform,
+ coalesce(platform_key_traffic,0)       as platform_key,
+ coalesce(user_brand_affiliation,'?')   as brand,
+ sum(p1_impressions)                    as site_p1_impressions,
+ sum(total_impressions)                 as site_total_impressions
+FROM user_edwprod.agg_gbl_impressions_deal 
+WHERE 
+  economic_area = 'NA'
+  and report_date between '2018-07-01' and '2018-07-30'
+  and platform_key in (1,2)
+GROUP BY 1,2,3,4,5,6,7;COLLECT STATS on sandbox.rev_mgmt_site_imp_temp column(deal_id);
+COLLECT STATS on sandbox.rev_mgmt_site_imp_temp column(report_date);
+COLLECT STATS on sandbox.rev_mgmt_site_imp_temp column(country_code);
+COLLECT STATS on sandbox.rev_mgmt_site_imp_temp column(traffic_source);
+COLLECT STATS on sandbox.rev_mgmt_site_imp_temp column(platform);
+COLLECT STATS on sandbox.rev_mgmt_site_imp_temp column(platform_key);
+COLLECT STATS on sandbox.rev_mgmt_site_imp_temp column(brand);
+COLLECT STATS COLUMN (deal_id,report_date,country_code,traffic_source,platform,platform_key,brand) on sandbox.rev_mgmt_site_imp_temp;
+COLLECT STATS COLUMN (deal_id,report_date) on sandbox.rev_mgmt_site_imp_temp;
+
+
+--LOAD DEAL FUNNEL STAGING TABLE
+DELETE FROM sandbox.rev_mgmt_deal_funnel_stg;
+INSERT INTO sandbox.rev_mgmt_deal_funnel_stg
+SELECT
+ coalesce(e.deal_id,f.deal_id,s.deal_id,t.deal_id,gp.deal_id,'-1')                                     as deal_id,
+ coalesce(e.report_date,f.report_date,s.report_date,t.report_date,gp.report_date)                      as report_date,
+ cast(wk.week_end as DATE)                                                                             as report_week,
+ coalesce(rw.report_week,0)                                                                            as report_week_num,
+ case when current_date -1 >= cast(wk.week_end as DATE) then 1 else 0 END                              as report_week_completed_flag,
+ coalesce(e.country_code,f.country_code,s.country_code,t.country_code,gp.country)                      as country,
+ case
+  when coalesce(e.traffic_source,f.traffic_source,s.traffic_source,t.traffic_source,gp.traffic_source,'Unknown') 
+   in ('unknown','Unknown','Unknown Utm','?') then 'Unknown'
+  else coalesce(e.traffic_source,f.traffic_source,s.traffic_source,t.traffic_source,gp.traffic_source,'Unknown')
+ end                                                                                                   as traffic_source,
+ case
+  when coalesce(e.platform,f.platform,s.platform,t.platform,gp.platform) = 'desktop' then 'other'
+  else lower(coalesce(e.platform,f.platform,s.platform,t.platform,gp.platform))
+ end                                                                                                   as platform, 
+ trim(coalesce(e.platform_key,f.platform_key,s.platform_key,t.platform_key,gp.platform_key))           as platform_key,
+ lower(coalesce(e.brand,f.brand,s.brand,t.brand,gp.brand,'unknown'))                                   as brand,
+ --Metrics
+ sum(zeroifnull(s.site_p1_impressions))     as site_p1_impressions,
+ sum(zeroifnull(s.site_total_impressions))  as site_total_impressions, 
+ sum(zeroifnull(e.email_p1_sends))          as email_p1_sends,
+ sum(zeroifnull(e.email_total_sends))       as email_total_sends,
+ sum(zeroifnull(e.email_p1_sd_opens))       as email_p1_impressions,
+ sum(zeroifnull(e.email_total_sd_opens))    as email_total_impressions,
+ 0                                          as site_weighted_impressions,
+ 0                                          as email_weighted_impressions,
+ sum(zeroifnull(t.udv))                     as udv,
+ sum(zeroifnull(t.uadv))                    as uadv,
+ sum(zeroifnull(f.orders))                  as orders,
+ sum(zeroifnull(f.parent_orders))           as parent_orders,
+ sum(zeroifnull(f.units))                   as units,
+ sum(zeroifnull(f.zdo_orders))              as zdo_orders, 
+ sum(zeroifnull(f.zdo_units))               as zdo_units, 
+ sum(zeroifnull(f.nob))                     as nob,
+ sum(zeroifnull(f.nor))                     as nor,
+ sum(zeroifnull(f.gb))                      as gb,
+ sum(zeroifnull(f.gr))                      as gr,
+ sum(zeroifnull(f.refund_orders))           as refund_orders,
+ sum(zeroifnull(f.cancel_orders))           as cancel_orders,
+ sum(zeroifnull(f.refund_gb))               as refund_gb,
+ sum(zeroifnull(f.cancel_gb))               as cancel_gb,
+ sum(zeroifnull(f.od_orders))               as od_orders,
+ sum(zeroifnull(f.od_spend))                as od_spend,
+ sum(zeroifnull(f.od_nob))                  as od_nob,
+ sum(zeroifnull(f.od_nor))                  as od_nor,
+ sum(zeroifnull(f.ils_orders))              as ils_orders,
+ sum(zeroifnull(f.ils_spend))               as ils_spend,
+ sum(zeroifnull(f.ils_nob))                 as ils_nob,
+ sum(zeroifnull(f.ils_nor))                 as ils_nor,
+ sum(zeroifnull(f.activations))             as activations,
+ sum(zeroifnull(f.reactivations))           as reactivations,
+ sum(zeroifnull(f.nob_activations))         as nob_activations,
+ sum(zeroifnull(f.nor_activations))         as nor_activations,
+ sum(zeroifnull(f.od_act_react_orders))     as od_act_react_orders,
+ sum(zeroifnull(f.od_act_react_spend))      as od_act_react_spend,
+ sum(zeroifnull(f.od_act_react_nob))        as od_act_react_nob,
+ sum(zeroifnull(f.od_act_react_nor))        as od_act_react_nor,
+ sum(zeroifnull(f.ils_act_react_orders))    as ils_act_react_orders,
+ sum(zeroifnull(f.ils_act_react_spend))     as ils_act_react_spend,
+ sum(zeroifnull(f.ils_act_react_nob))       as ils_act_react_nob,
+ sum(zeroifnull(f.ils_act_react_nor))       as ils_act_react_nor,
+ sum(zeroifnull(f.booking_fee))             as booking_fee,
+ sum(zeroifnull(f.shipping_cost))           as shipping_cost,
+ sum(zeroifnull(f.refund_allowance))        as refund_allowance,
+ sum(zeroifnull(f.freight_allowance))       as freight_allowance,
+ sum(zeroifnull(f.shipping_dollars))        as shipping_dollars,
+ sum(zeroifnull(gp.ogp))                    as ogp,
+ sum(zeroifnull(gp.refund_ogp))             as refund_ogp,
+ sum(zeroifnull(gp.cancel_ogp))             as cancel_ogp,
+ null as placeholder1,
+ null as placeholder2,
+ null as placeholder3
+FROM sandbox.rev_mgmt_email_imp_temp e
+ FULL OUTER JOIN sandbox.rev_mgmt_site_imp_temp s
+  on s.deal_id = e.deal_id
+  and s.report_date = e.report_date
+  and s.country_code = e.country_code
+  and s.traffic_source = e.traffic_source
+  and s.platform = e.platform
+  and s.platform_key = e.platform_key
+  and s.brand = e.brand
+ FULL OUTER JOIN
+ (SELECT
+   coalesce(deal_id,'-1')                                                            as deal_id,
+   report_date                                                                       as report_date,
+   coalesce(country_code,'?')                                                        as country_code,
+   coalesce(traffic_source,'?')                                                      as traffic_source,
+   coalesce(platform,'?')                                                            as platform,
+   coalesce(platform_key_traffic,0)                                                  as platform_key,
+   coalesce(user_brand_affiliation,'?')                                              as brand,
+   sum(parent_orders_qty)                                                            as parent_orders,
+   sum(nob_USD)                                                                      as nob,
+   sum(nor_USD)                                                                      as nor,
+   sum(gross_bookings_USD)                                                           as gb,
+   sum(gross_revenue_USD)                                                            as gr,
+   sum(refunds_qty)                                                                  as refund_orders,
+   sum(same_day_cancel_qty)                                                          as cancel_orders,
+   sum(refunds_amt_USD)                                                              as refund_gb,
+   sum(-resignation_dollars_USD)                                                     as cancel_gb,
+   sum(od_qty)                                                                       as od_orders,
+   sum(od_amt_USD)                                                                   as od_spend,
+   sum(od_nob_USD)                                                                   as od_nob,
+   sum(od_nor_USD)                                                                   as od_nor,
+   sum(ils_qty)                                                                      as ils_orders,
+   sum(ils_amt_USD)                                                                  as ils_spend,
+   sum(ils_nob_USD)                                                                  as ils_nob,
+   sum(ils_nor_USD)                                                                  as ils_nor,
+   sum(est_3pl_shipping_cost_USD)                                                    as shipping_cost,
+   sum(refund_allowance_USD)                                                         as refund_allowance,
+   sum(freight_allowance_USD)                                                        as freight_allowance,
+   sum(shipping_dollars_USD)                                                         as shipping_dollars,
+   sum(coalesce(transactions,0) - coalesce(zdo_transactions,0))                      as orders,  
+   sum(coalesce(transactions_qty,0) - coalesce(zdo_transactions_qty,0))              as units, 
+   sum(coalesce(zdo_transactions,0))                                                 as zdo_orders,  
+   sum(coalesce(zdo_transactions_qty,0))                                             as zdo_units,
+   sum(coalesce(booking_fee_USD,0))                                                  as booking_fee,  
+   sum(activations)                                                                  as activations,
+   sum(reactivations)                                                                as reactivations,
+   sum(nob_activations_USD)                                                          as nob_activations,
+   sum(nor_activations_USD)                                                          as nor_activations,
+   sum(coalesce(od_activations_qty,0)      + coalesce(od_reactivations_qty,0))       as od_act_react_orders,
+   sum(coalesce(od_activations_amt_USD,0)  + coalesce(od_reactivations_amt_USD,0))   as od_act_react_spend,
+   sum(coalesce(od_activations_nob_USD,0)  + coalesce(od_reactivations_nob_USD,0))   as od_act_react_nob,
+   sum(coalesce(od_activations_nor_USD,0)  + coalesce(od_reactivations_nor_USD,0))   as od_act_react_nor,
+   sum(coalesce(ils_activations_qty,0)     + coalesce(ils_reactivations_qty,0))      as ils_act_react_orders,
+   sum(coalesce(ils_activations_amt_USD,0) + coalesce(ils_reactivations_amt_USD,0))  as ils_act_react_spend,
+   sum(coalesce(ils_activations_nob_USD,0) + coalesce(ils_reactivations_nob_USD,0))  as ils_act_react_nob,
+   sum(coalesce(ils_activations_nor_USD,0) + coalesce(ils_reactivations_nor_USD,0))  as ils_act_react_nor
+  FROM user_edwprod.agg_gbl_financials_deal_usd
+  WHERE 
+   economic_area = 'NA' 
+   and report_date between '2018-07-01' and '2018-07-30'
+   and platform_key_traffic in (1,2)
+  GROUP BY 1,2,3,4,5,6,7
+ ) f
+  on f.deal_id = coalesce(e.deal_id,s.deal_id)
+  and f.report_date = coalesce(e.report_date,s.report_date)
+  and f.country_code = coalesce(e.country_code,s.country_code)
+  and f.traffic_source = coalesce(e.traffic_source,s.traffic_source)
+  and f.platform = coalesce(e.platform,s.platform)
+  and f.platform_key = coalesce(e.platform_key,s.platform_key)
+  and f.brand = coalesce(e.brand,s.brand)
+ FULL OUTER JOIN
+ (SELECT
+   coalesce(deal_id,'-1')                    as deal_id,
+   report_date                               as report_date,
+   coalesce(country_code,'?')                as country_code,
+   coalesce(traffic_source,'?')              as traffic_source,
+   coalesce(platform,'?')                    as platform,
+   coalesce(platform_key_traffic,0)          as platform_key,
+   coalesce(user_brand_affiliation,'?')      as brand,
+   sum(uniq_deal_view_visitors)              as udv,
+   sum(uniq_available_deal_views)            as uadv
+  FROM user_edwprod.agg_gbl_traffic_deal
+  WHERE 
+   economic_area = 'NA' 
+   and report_date between '2018-07-01' and '2018-07-30'
+   and platform_key_traffic in (1,2)
+  GROUP BY 1,2,3,4,5,6,7
+ ) t
+  on t.deal_id = coalesce(f.deal_id,e.deal_id,s.deal_id)
+  and t.report_date = coalesce(f.report_date,e.report_date,s.report_date)
+  and t.country_code = coalesce(f.country_code,e.country_code,s.country_code)
+  and t.traffic_source = coalesce(f.traffic_source,e.traffic_source,s.traffic_source)
+  and t.platform = coalesce(f.platform,e.platform,s.platform)
+  and t.platform_key = coalesce(f.platform_key,e.platform_key,s.platform_key)
+  and t.brand = coalesce(f.brand,e.brand,s.brand)
+FULL OUTER JOIN
+ (SELECT 
+   coalesce(deal_id,'-1') as deal_id, 
+   report_date_utc as report_date, 
+   case when platform_key in (1,12,13) then 'US' when country_id = 40 then 'CA' when country_id = 235 then 'US' end as country, 
+   case when traffic_source is null or traffic_source like 'Unknown%' then 'Unknown' else traffic_source end as traffic_source, 
+   case when lower(transaction_platform) in ('app','touch','web') then lower(transaction_platform) else 'other' end as platform, 
+   case when platform_key in (1,11,12,13) then 1 else platform_key end as platform_key, 
+   brand, 
+   sum(case when action = 'authorize' or is_canceled = 1 then OGP else 0 end) as ogp,
+   sum(case when action in ('refund','cancel') then OGP else 0 end) as refund_ogp,
+   sum(case when is_canceled = 1 then OGP else 0 end) as cancel_ogp
+ from sandbox.rev_mgmt_order_gp
+ where report_date_utc between '2018-07-01' and '2018-07-30'
+ group by 1,2,3,4,5,6,7
+ ) gp
+  on gp.deal_id = coalesce(f.deal_id,e.deal_id,s.deal_id,t.deal_id)
+  and gp.report_date = coalesce(f.report_date,e.report_date,s.report_date,t.report_date)
+  and gp.country = coalesce(f.country_code,e.country_code,s.country_code,t.country_code)
+  and gp.traffic_source = coalesce(f.traffic_source,e.traffic_source,s.traffic_source,t.traffic_source)
+  and gp.platform = coalesce(f.platform,e.platform,s.platform,t.platform)
+  and gp.platform_key = coalesce(f.platform_key,e.platform_key,s.platform_key,t.platform_key)
+  and gp.brand = coalesce(f.brand,e.brand,s.brand,t.brand)
+LEFT JOIN user_groupondw.dim_day  dy on dy.day_rw = coalesce(e.report_date,f.report_date,s.report_date,t.report_date,gp.report_date)
+LEFT JOIN user_groupondw.dim_week wk on dy.week_key = wk.week_key
+LEFT JOIN 
+ (select distinct report_date, report_week 
+  from user_edwprod.agg_gbl_financials_deal_usd 
+  where report_date >= '2016-01-01'
+ ) rw on rw.report_date = coalesce(e.report_date,f.report_date,s.report_date,t.report_date,gp.report_date)
+GROUP BY 1,2,3,4,5,6,7,8,9,10;
+COLLECT STATS on sandbox.rev_mgmt_deal_funnel_stg column(report_date);
+
+
+--LOAD DEAL FUNNEL PROD TABLE
+DELETE FROM sandbox.rev_mgmt_deal_funnel_tbl WHERE report_date in (SELECT distinct report_date FROM sandbox.rev_mgmt_deal_funnel_stg);
+INSERT INTO sandbox.rev_mgmt_deal_funnel_tbl SELECT * FROM sandbox.rev_mgmt_deal_funnel_stg;
+
+
+--UPDATE email_weighted_impressions
+UPDATE sandbox.rev_mgmt_deal_funnel_tbl
+FROM 
+(select send_date, brand, 'email' as platform, deal_id, sum(round(weighted_sends,0)) as weighted_sends
+ from sandbox.rev_mgmt_wgt_sends_by_deal 
+ where send_date between '2018-07-01' and '2018-07-30'
+ group by 1,2,3,4
+) ws
+SET email_weighted_impressions = ws.weighted_sends
+WHERE 
+ sandbox.rev_mgmt_deal_funnel_tbl.report_date = ws.send_date and
+ sandbox.rev_mgmt_deal_funnel_tbl.brand = ws.brand and
+ sandbox.rev_mgmt_deal_funnel_tbl.platform = ws.platform and
+ sandbox.rev_mgmt_deal_funnel_tbl.deal_id = ws.deal_id
+;
